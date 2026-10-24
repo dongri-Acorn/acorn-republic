@@ -38,13 +38,11 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #chatInputBar button{border:0;border-radius:12px;padding:12px 18px;background:#8fa2ff;color:#0d1020;font-weight:bold;font-size:14px;cursor:pointer}
 .bubble{position:fixed;transform:translate(-50%,-100%);background:#fff;color:#222;padding:8px 12px;border-radius:14px;font-size:14px;max-width:240px;word-break:break-word;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;z-index:35;transition:opacity .3s;white-space:pre-wrap;line-height:1.4}
 .bubble:after{content:'';position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:7px solid transparent;border-top-color:#fff}
-.bubble.fade{opacity:0}
 .bubble .name{font-size:11px;color:#666;margin-bottom:2px;font-weight:bold}
 #emotePanel{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 120px);transform:translateX(-50%) translateY(20px);background:rgba(20,24,38,.85);backdrop-filter:blur(8px);padding:14px 16px;border-radius:16px;display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s, transform .2s;z-index:25}
 #emotePanel.open{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
 #emotePanel .title{width:100%;text-align:center;font-size:12px;color:var(--ui-sub);margin-bottom:2px}
 #emotePanel button{border:0;border-radius:12px;padding:10px 14px;background:rgba(60,70,110,.9);color:var(--ui-fg);font-size:13px;cursor:pointer;white-space:nowrap}
-#emotePanel button:active{background:rgba(90,110,180,.95)}
 #emotePanel button .emoji{font-size:18px;margin-right:6px}
 #toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);background:rgba(30,40,20,.8);color:#fff;padding:8px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:50}
 #loginOverlay{position:fixed;inset:0;background:rgba(10,14,26,.9);display:flex;align-items:center;justify-content:center;z-index:100;transition:opacity .3s;flex-direction:column;gap:16px}
@@ -132,7 +130,6 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 <div id="stick"><div id="knob"></div></div>
 <button id="jump">ジャンプ</button>
 
-<!-- ★ Three.js は必ずモジュールスクリプトより先に読み込む ★ -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <script type="module">
@@ -140,9 +137,6 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebas
 import { getDatabase, ref, set, update, remove, onValue, onDisconnect, push, query, limitToLast, onChildAdded } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 
-// ============================================================
-// Firebase 初期化
-// ============================================================
 const firebaseConfig = {
   apiKey: "AIzaSyCDuMl1RfRWACrLEPiEKRqN4DcyTqgXsJA",
   authDomain: "acornrepublic.firebaseapp.com",
@@ -158,31 +152,19 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const auth = getAuth(app);
 
-// ============================================================
-// グローバル状態
-// ============================================================
 let PLAYER_ID = null;
 let playerName = 'ゲスト';
 let gameStarted = false;
 
 const custom = {
-  hair: 'short',
-  hairColor: '#2a1d16',
-  skinColor: '#b97a4b',
-  shirtColor: '#1b2a5c',
-  sockColor: '#f5f5f5',
-  eyeColor: '#111111',
-  eyeShape: 'round',
-  mouth: 'smile'
+  hair: 'short', hairColor: '#2a1d16', skinColor: '#b97a4b',
+  shirtColor: '#1b2a5c', sockColor: '#f5f5f5', eyeColor: '#111111',
+  eyeShape: 'round', mouth: 'smile'
 };
 
-// Three.js 関連（後で初期化）
-let renderer, scene, camera, sun, human, body, torso, torsoMesh, headGroup, headMesh,
-    faceGroup, eyeL, eyeR, browMat, browL, browR, mouthMesh, hairGroup,
-    matSkin, matShirt, matSock, matHair, matEye, matMouth,
-    armL, armR, legL, legR;
+let renderer, scene, camera, sun;
+let myModel; // 自分のモデル（{group, body, armL, armR, legL, legR, headGroup, torsoMesh, ...}）
 
-// プレイヤー状態
 let yaw = 0, pitch = 0.35, dist = 7;
 let facing = 0;
 let sitting = false, emoteName = null, emoteTime = 0;
@@ -190,30 +172,23 @@ let onGround = true, vy = 0, phase = 0;
 const vel = { x: 0, z: 0 };
 let hudHidden = false;
 
-// リモートプレイヤー
-const remotePlayers = {};
-
-// 妖精
+const remotePlayers = {}; // uid -> { group, model, target, current }
 const fairies = [];
 let acornCount = 0;
 
-// チャット
 let chatLog = [];
 const remoteBubbles = [];
 let localBubble = null;
 
-// 入力
 const keys = {};
 const joy = { x: 0, y: 0 };
 let jumpBtn = false;
 
-// タイマー
 let lastSync = 0;
-const SYNC_INTERVAL = 0.1;
+const SYNC_INTERVAL = 0.05; // 20Hz
 let lastTime = 0;
 let saveLocalTimer = 0;
 
-// DOM
 const canvas = document.getElementById('c');
 const hudEl = document.getElementById('hud');
 const posEl = document.getElementById('pos');
@@ -231,10 +206,10 @@ const loginStatus = document.getElementById('loginStatus');
 const nameInput = document.getElementById('nameInput');
 const startBtn = document.getElementById('startBtn');
 
-const SAVE_KEY = 'acorn_online_save_v1';
+const SAVE_KEY = 'acorn_online_save_v2';
 
 // ============================================================
-// 匿名ログイン
+// 認証
 // ============================================================
 function initAuth() {
   try {
@@ -250,10 +225,7 @@ function initAuth() {
 
   loginStatus.textContent = '認証中…';
   signInAnonymously(auth)
-    .then(() => {
-      loginStatus.textContent = '接続完了。名前を入力してはじめてください';
-      startBtn.disabled = false;
-    })
+    .then(() => { loginStatus.textContent = '接続完了。名前を入力してはじめてください'; startBtn.disabled = false; })
     .catch((err) => {
       console.error(err);
       loginStatus.textContent = '認証失敗: ' + err.code + '（匿名ログインを有効にしてください）';
@@ -261,11 +233,159 @@ function initAuth() {
     });
 
   onAuthStateChanged(auth, (user) => {
-    if (user) {
-      PLAYER_ID = user.uid;
-      console.log('auth.uid =', PLAYER_ID);
-    }
+    if (user) { PLAYER_ID = user.uid; console.log('auth.uid =', PLAYER_ID); }
   });
+}
+
+// ============================================================
+// モデル構築（ローカル・リモート共通）
+// ============================================================
+function meshBox(w, h, d, mat) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.castShadow = true;
+  return m;
+}
+
+function buildCharacterModel(colors) {
+  const model = {};
+  model.matSkin = new THREE.MeshStandardMaterial({ color: colors.skinColor || '#b97a4b', roughness: 0.8 });
+  model.matShirt = new THREE.MeshStandardMaterial({ color: colors.shirtColor || '#1b2a5c', roughness: 0.7 });
+  model.matSock = new THREE.MeshStandardMaterial({ color: colors.sockColor || '#f5f5f5', roughness: 0.7 });
+  model.matHair = new THREE.MeshStandardMaterial({ color: colors.hairColor || '#2a1d16', roughness: 0.8 });
+  model.matEye = new THREE.MeshBasicMaterial({ color: colors.eyeColor || '#111111' });
+  model.matMouth = new THREE.MeshBasicMaterial({ color: 0x6b2a2a });
+
+  const group = new THREE.Group();
+  const body = new THREE.Group(); group.add(body);
+  const torso = new THREE.Group(); body.add(torso);
+
+  const torsoMesh = meshBox(0.52, 0.66, 0.3, model.matShirt);
+  torsoMesh.position.y = 1.18; torso.add(torsoMesh);
+
+  const headGroup = new THREE.Group();
+  headGroup.position.y = 1.74; body.add(headGroup);
+  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16), model.matSkin);
+  headMesh.castShadow = true; headGroup.add(headMesh);
+
+  const faceGroup = new THREE.Group(); headGroup.add(faceGroup);
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), model.matEye);
+  eyeL.position.set(-0.07, 0.02, 0.18); faceGroup.add(eyeL);
+  const eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), model.matEye);
+  eyeR.position.set(0.07, 0.02, 0.18); faceGroup.add(eyeR);
+
+  const browMat = new THREE.MeshBasicMaterial({ color: colors.hairColor || '#2a1d16' });
+  const browL = meshBox(0.06, 0.012, 0.01, browMat);
+  browL.position.set(-0.07, 0.075, 0.185); faceGroup.add(browL);
+  const browR = meshBox(0.06, 0.012, 0.01, browMat);
+  browR.position.set(0.07, 0.075, 0.185); faceGroup.add(browR);
+
+  const mouthMesh = meshBox(0.06, 0.02, 0.01, model.matMouth);
+  mouthMesh.position.set(0, -0.07, 0.19); faceGroup.add(mouthMesh);
+
+  const cheekMatFace = new THREE.MeshBasicMaterial({ color: 0xff8f9f, transparent: true, opacity: 0.5 });
+  const cL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
+  cL.position.set(-0.11, -0.03, 0.16); faceGroup.add(cL);
+  const cR = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
+  cR.position.set(0.11, -0.03, 0.16); faceGroup.add(cR);
+
+  const hairGroup = new THREE.Group(); headGroup.add(hairGroup);
+
+  // 腕
+  function createArm(side) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * 0.36, 1.47, 0); body.add(shoulder);
+    const upperArm = meshBox(0.14, 0.32, 0.14, model.matSkin);
+    upperArm.position.y = -0.16; shoulder.add(upperArm);
+    const elbow = new THREE.Group(); elbow.position.y = -0.32; shoulder.add(elbow);
+    const foreArm = meshBox(0.13, 0.3, 0.13, model.matSkin);
+    foreArm.position.y = -0.15; elbow.add(foreArm);
+    const sleeve = meshBox(0.17, 0.24, 0.17, model.matShirt);
+    sleeve.position.y = -0.11; shoulder.add(sleeve);
+    return { shoulder, elbow };
+  }
+  // 脚
+  function createLeg(side) {
+    const hip = new THREE.Group();
+    hip.position.set(side * 0.14, 0.86, 0); body.add(hip);
+    const thigh = meshBox(0.2, 0.42, 0.2, model.matSkin);
+    thigh.position.y = -0.21; hip.add(thigh);
+    const knee = new THREE.Group(); knee.position.y = -0.42; hip.add(knee);
+    const shin = meshBox(0.18, 0.44, 0.18, model.matSkin);
+    shin.position.y = -0.22; knee.add(shin);
+    const sock = meshBox(0.235, 0.4, 0.235, model.matSock);
+    sock.position.y = -0.2; hip.add(sock);
+    return { hip, knee };
+  }
+
+  model.group = group;
+  model.body = body;
+  model.torsoMesh = torsoMesh;
+  model.headGroup = headGroup;
+  model.hairGroup = hairGroup;
+  model.eyeL = eyeL; model.eyeR = eyeR;
+  model.mouthMesh = mouthMesh;
+  model.browMat = browMat;
+  model.armL = createArm(-1);
+  model.armR = createArm(1);
+  model.legL = createLeg(-1);
+  model.legR = createLeg(1);
+
+  buildHairOn(model, colors.hair || 'short');
+  applyFaceOn(model, colors);
+  return model;
+}
+
+function buildHairOn(model, style) {
+  const hg = model.hairGroup;
+  while (hg.children.length) hg.remove(hg.children[0]);
+  if (style === 'bald') return;
+  const capMat = model.matHair;
+  if (style === 'short') {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
+    cap.position.y = 0.02; cap.rotation.x = -0.15; hg.add(cap);
+    const bang = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.06, 0.06), capMat);
+    bang.position.set(0, 0.13, 0.15); bang.rotation.x = -0.3; hg.add(bang);
+  } else if (style === 'long') {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.6), capMat);
+    cap.position.y = 0.02; cap.rotation.x = -0.12; hg.add(cap);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.5, 0.12), capMat);
+    back.position.set(0, -0.15, -0.13); back.castShadow = true; hg.add(back);
+    for (const s of [-1, 1]) {
+      const side = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.32, 0.14), capMat);
+      side.position.set(s * 0.19, -0.05, -0.02); hg.add(side);
+    }
+  } else if (style === 'twin') {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
+    cap.position.y = 0.02; cap.rotation.x = -0.15; hg.add(cap);
+    for (const s of [-1, 1]) {
+      const tailBase = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), capMat);
+      tailBase.position.set(s * 0.19, 0.0, -0.05); hg.add(tailBase);
+      const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.03, 0.4, 8), capMat);
+      tail.position.set(s * 0.25, -0.2, -0.08); tail.rotation.z = s * 0.3; tail.castShadow = true; hg.add(tail);
+    }
+  } else if (style === 'bob') {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.215, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), capMat);
+    cap.position.y = 0.02; cap.rotation.x = -0.1; hg.add(cap);
+    for (const s of [-1, 1]) {
+      const side = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.22, 0.16), capMat);
+      side.position.set(s * 0.2, -0.05, -0.02); side.castShadow = true; hg.add(side);
+    }
+  }
+}
+
+function applyFaceOn(model, colors) {
+  model.eyeL.scale.set(1, 1, 1); model.eyeR.scale.set(1, 1, 1);
+  model.eyeL.rotation.set(0, 0, 0); model.eyeR.rotation.set(0, 0, 0);
+  model.eyeL.visible = true; model.eyeR.visible = true;
+  if (colors.eyeShape === 'happy') { model.eyeL.scale.set(1, 0.5, 1); model.eyeR.scale.set(1, 0.5, 1); }
+  else if (colors.eyeShape === 'sharp') { model.eyeL.rotation.z = 0.4; model.eyeR.rotation.z = -0.4; model.eyeL.scale.set(1, 0.8, 1); model.eyeR.scale.set(1, 0.8, 1); }
+  else if (colors.eyeShape === 'closed') { model.eyeL.visible = false; model.eyeR.visible = false; }
+
+  model.mouthMesh.scale.set(1, 1, 1);
+  if (colors.mouth === 'smile') model.mouthMesh.scale.set(1.2, 0.6, 1);
+  else if (colors.mouth === 'open') model.mouthMesh.scale.set(1, 2.2, 1);
+  else if (colors.mouth === 'neutral') model.mouthMesh.scale.set(1, 0.4, 1);
+  else if (colors.mouth === 'cat') model.mouthMesh.scale.set(1.2, 0.7, 1);
 }
 
 // ============================================================
@@ -281,8 +401,8 @@ async function startGame() {
 
   initThree();
   initWorld();
-  initLocalPlayer();
-  applyCustomization();
+  initMyPlayer();
+  applyMyCustomization();
   refreshCustomUI();
   updateAcornUI();
   applyHudVisibility();
@@ -290,9 +410,13 @@ async function startGame() {
   const myRef = ref(db, 'players/' + PLAYER_ID);
   await set(myRef, {
     name: playerName,
-    x: 0, y: 0, z: 0, facing: 0, pose: 'stand',
+    x: 0, y: 0, z: 0, facing: 0,
     skinColor: custom.skinColor, shirtColor: custom.shirtColor,
     hairColor: custom.hairColor, hair: custom.hair, eyeColor: custom.eyeColor,
+    eyeShape: custom.eyeShape, mouth: custom.mouth, sockColor: custom.sockColor,
+    pose: 'stand',
+    // 関節角度（初期値）
+    rot: { alx:0,aly:0,alz:0,aex:0, arx:0,ary:0,arz:0,aex2:0, llx:0,lly:0,llz:0,lkx:0,lky:0, rlx:0,rly:0,rlz:0,rkx:0,rky:0, bx:0,by:0,bz:0, bpy:0, hx:0,hy:0,hz:0 },
     lastSeen: Date.now()
   });
   onDisconnect(myRef).remove();
@@ -309,10 +433,7 @@ async function startGame() {
 // Three.js 初期化
 // ============================================================
 function initThree() {
-  if (typeof THREE === 'undefined') {
-    alert('Three.js の読み込みに失敗しました。ページを再読み込みしてください。');
-    return;
-  }
+  if (typeof THREE === 'undefined') { alert('Three.js の読み込みに失敗しました。再読み込みしてください。'); return; }
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
@@ -324,13 +445,11 @@ function initThree() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xbfe3ff);
   scene.fog = new THREE.Fog(0xbfe3ff, 60, 220);
-
   camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
 
   scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x6b8f4e, 1.05));
   sun = new THREE.DirectionalLight(0xfff6df, 1.25);
-  sun.position.set(30, 40, 20);
-  sun.castShadow = true;
+  sun.position.set(30, 40, 20); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 120 });
   sun.shadow.bias = -0.0005;
@@ -364,48 +483,32 @@ function initWorld() {
   }
   groundGeo.computeVertexNormals();
   const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ color: 0x6fae4a, roughness: 1 }));
-  ground.receiveShadow = true;
-  scene.add(ground);
+  ground.receiveShadow = true; scene.add(ground);
 
   (function addGrassField() {
     const g = new THREE.BufferGeometry();
     const N = 4000, arr = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) {
       const a = Math.random() * Math.PI * 2, r = 18 + Math.random() * 140;
-      arr[i * 3] = Math.cos(a) * r;
-      arr[i * 3 + 1] = 0.05;
-      arr[i * 3 + 2] = Math.sin(a) * r;
+      arr[i * 3] = Math.cos(a) * r; arr[i * 3 + 1] = 0.05; arr[i * 3 + 2] = Math.sin(a) * r;
     }
     g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
     const m = new THREE.PointsMaterial({ color: 0x4f8f35, size: 0.5, sizeAttenuation: true, transparent: true, opacity: 0.8 });
-    const p = new THREE.Points(g, m);
-    p.position.y = 0.02;
-    scene.add(p);
+    const p = new THREE.Points(g, m); p.position.y = 0.02; scene.add(p);
   })();
 
   const grid = new THREE.GridHelper(600, 300, 0x8fbf6a, 0x7aa85a);
-  grid.position.y = 0.02;
-  grid.material.opacity = 0.25;
-  grid.material.transparent = true;
-  scene.add(grid);
+  grid.position.y = 0.02; grid.material.opacity = 0.25; grid.material.transparent = true; scene.add(grid);
 
   buildTreesAndScenery();
   buildFairies();
 }
 
 function makeTree(x, z, scale = 1) {
-  const g = new THREE.Group();
-  g.position.set(x, 0, z);
+  const g = new THREE.Group(); g.position.set(x, 0, z);
   const trunkH = 2.2 * scale;
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.16 * scale, 0.24 * scale, trunkH, 7),
-    new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 })
-  );
-  trunk.position.y = trunkH / 2;
-  trunk.castShadow = true;
-  trunk.receiveShadow = true;
-  g.add(trunk);
-
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16 * scale, 0.24 * scale, trunkH, 7), new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
+  trunk.position.y = trunkH / 2; trunk.castShadow = true; trunk.receiveShadow = true; g.add(trunk);
   const mats = [
     new THREE.MeshStandardMaterial({ color: 0x3f8f3a, roughness: 0.9 }),
     new THREE.MeshStandardMaterial({ color: 0x4fa64a, roughness: 0.9 }),
@@ -413,13 +516,9 @@ function makeTree(x, z, scale = 1) {
   ];
   [[0,trunkH+0.7*scale,0,1.1*scale],[0.7*scale,trunkH+0.4*scale,0.4*scale,0.8*scale],[-0.6*scale,trunkH+0.5*scale,-0.5*scale,0.85*scale],[0.2*scale,trunkH+1.2*scale,-0.3*scale,0.7*scale]].forEach((b, i) => {
     const m = new THREE.Mesh(new THREE.SphereGeometry(b[3], 10, 8), mats[i % 3]);
-    m.position.set(b[0], b[1], b[2]);
-    m.castShadow = true;
-    m.receiveShadow = true;
-    g.add(m);
+    m.position.set(b[0], b[1], b[2]); m.castShadow = true; m.receiveShadow = true; g.add(m);
   });
-  scene.add(g);
-  return g;
+  scene.add(g); return g;
 }
 
 function makeOakTree(x, z, scale = 1) {
@@ -440,8 +539,7 @@ function makeOakTree(x, z, scale = 1) {
 }
 
 function makeBush(x, z, scale = 1) {
-  const g = new THREE.Group();
-  g.position.set(x, 0, z);
+  const g = new THREE.Group(); g.position.set(x, 0, z);
   const mat = new THREE.MeshStandardMaterial({ color: 0x4f9f45, roughness: 1 });
   for (let i = 0; i < 4; i++) {
     const m = new THREE.Mesh(new THREE.SphereGeometry((0.35 + Math.random() * 0.25) * scale, 8, 6), mat);
@@ -452,8 +550,7 @@ function makeBush(x, z, scale = 1) {
 }
 
 function makeFlowerPatch(x, z) {
-  const g = new THREE.Group();
-  g.position.set(x, 0, z);
+  const g = new THREE.Group(); g.position.set(x, 0, z);
   const colors = [0xff6b8a, 0xffd166, 0xffffff, 0xb388ff, 0xff9f68];
   for (let i = 0; i < 14; i++) {
     const a = Math.random() * Math.PI * 2, r = Math.random() * 1.6;
@@ -467,29 +564,19 @@ function makeFlowerPatch(x, z) {
 
 function makeRock(x, z, s = 1) {
   const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 * s, 0), new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 1 }));
-  m.position.set(x, 0.3 * s, z);
-  m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-  m.scale.y = 0.7; m.castShadow = true; m.receiveShadow = true;
-  scene.add(m);
+  m.position.set(x, 0.3 * s, z); m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+  m.scale.y = 0.7; m.castShadow = true; m.receiveShadow = true; scene.add(m);
 }
 
 function makeHill(x, z, r, h) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x5f9f4f, roughness: 1 }));
-  m.position.set(x, -r + h, z);
-  m.scale.y = h / r; m.receiveShadow = true;
-  scene.add(m);
+  m.position.set(x, -r + h, z); m.scale.y = h / r; m.receiveShadow = true; scene.add(m);
 }
 
 function buildTreesAndScenery() {
   const FC = new THREE.Vector3(-22, 0, 18);
-  for (let i = 0; i < 24; i++) {
-    const a = (i / 24) * Math.PI * 2, r = 10 + Math.sin(i * 1.7) * 2.5;
-    makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 1.0 + Math.random() * 0.5);
-  }
-  for (let i = 0; i < 10; i++) {
-    const a = Math.random() * Math.PI * 2, r = Math.random() * 7;
-    makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 0.9 + Math.random() * 0.4);
-  }
+  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2, r = 10 + Math.sin(i * 1.7) * 2.5; makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 1.0 + Math.random() * 0.5); }
+  for (let i = 0; i < 10; i++) { const a = Math.random() * Math.PI * 2, r = Math.random() * 7; makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 0.9 + Math.random() * 0.4); }
   [[-16,-6,1.3],[-20,4,1.1],[-13,12,1.0],[-24,-14,1.5],[-10,-20,1.2],[16,10,1.2],[22,-2,1.4],[18,-18,1.1],[26,12,1.3],[30,-12,1.5],[-4,-22,1.1],[8,16,1.0],[-28,20,1.4],[36,4,1.6],[-32,-8,1.2],[2,6,1.0],[-2,-6,1.1],[14,4,1.2],[-6,10,1.0]].forEach(([x,z,s]) => makeTree(x, z, s));
   [[-6,6,1],[10,4,1.2],[14,-4,1],[-14,-2,1.1],[4,-16,1],[20,2,1.3],[-18,14,1.1],[28,-4,1.2],[0,10,1],[6,10,1]].forEach(([x,z,s]) => makeBush(x, z, s));
   [[-8,2],[-3,8],[9,8],[-12,-8],[12,-12],[-2,-10],[18,6],[-20,2],[6,14],[-16,-16],[0,-14],[2,2],[10,10],[-9,15]].forEach(([x,z]) => makeFlowerPatch(x, z));
@@ -499,13 +586,9 @@ function buildTreesAndScenery() {
 
 function buildFairies() {
   const FC = new THREE.Vector3(-22, 0, 18);
-  const positions = [
-    [FC.x+3,FC.z+2],[FC.x-4,FC.z-3],[FC.x+5,FC.z-4],[FC.x-5,FC.z+5],[FC.x+1,FC.z-6],
-    [8,6],[-8,-8],[14,-12],[-14,10],[0,-12],[18,12]
-  ];
+  const positions = [[FC.x+3,FC.z+2],[FC.x-4,FC.z-3],[FC.x+5,FC.z-4],[FC.x-5,FC.z+5],[FC.x+1,FC.z-6],[8,6],[-8,-8],[14,-12],[-14,10],[0,-12],[18,12]];
   positions.forEach(([x, z], i) => {
-    const g = new THREE.Group();
-    g.position.set(x, 0, z);
+    const g = new THREE.Group(); g.position.set(x, 0, z);
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd9a44a, roughness: 0.6, emissive: 0x553311, emissiveIntensity: 0.15 });
     const capMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
     const bodyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), bodyMat);
@@ -515,21 +598,12 @@ function buildFairies() {
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.12, 5), capMat);
     stem.position.y = 0.9; g.add(stem);
     const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-    for (const s of [-1, 1]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat);
-      eye.position.set(s * 0.1, 0.52, 0.24); g.add(eye);
-    }
+    for (const s of [-1, 1]) { const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat); eye.position.set(s * 0.1, 0.52, 0.24); g.add(eye); }
     const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff8f9f });
-    for (const s of [-1, 1]) {
-      const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), cheekMat);
-      cheek.position.set(s * 0.16, 0.44, 0.2); g.add(cheek);
-    }
+    for (const s of [-1, 1]) { const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), cheekMat); cheek.position.set(s * 0.16, 0.44, 0.2); g.add(cheek); }
     const wingMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.6, roughness: 0.3, emissive: 0x88bbff, emissiveIntensity: 0.4, side: THREE.DoubleSide });
     const wingGeo = new THREE.CircleGeometry(0.28, 10);
-    for (const s of [-1, 1]) {
-      const wing = new THREE.Mesh(wingGeo, wingMat);
-      wing.position.set(s * 0.26, 0.55, 0); wing.rotation.y = s * Math.PI / 2.5; wing.rotation.x = -0.3; g.add(wing);
-    }
+    for (const s of [-1, 1]) { const wing = new THREE.Mesh(wingGeo, wingMat); wing.position.set(s * 0.26, 0.55, 0); wing.rotation.y = s * Math.PI / 2.5; wing.rotation.x = -0.3; g.add(wing); }
     const aura = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe6a0, transparent: true, opacity: 0.12, depthWrite: false }));
     aura.position.y = 0.6; g.add(aura);
     scene.add(g);
@@ -539,168 +613,35 @@ function buildFairies() {
 }
 
 // ============================================================
-// ローカルプレイヤー
+// 自分のプレイヤー
 // ============================================================
-function meshBox(w, h, d, mat) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  m.castShadow = true;
-  return m;
-}
-
-function initLocalPlayer() {
-  human = new THREE.Group();
-  scene.add(human);
-  body = new THREE.Group(); human.add(body);
-  torso = new THREE.Group(); body.add(torso);
-
-  matSkin = new THREE.MeshStandardMaterial({ color: 0xb97a4b, roughness: 0.8 });
-  matShirt = new THREE.MeshStandardMaterial({ color: 0x1b2a5c, roughness: 0.7 });
-  matSock = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.7 });
-  matHair = new THREE.MeshStandardMaterial({ color: 0x2a1d16, roughness: 0.8 });
-  matEye = new THREE.MeshBasicMaterial({ color: 0x111111 });
-  matMouth = new THREE.MeshBasicMaterial({ color: 0x6b2a2a });
-
-  torsoMesh = meshBox(0.52, 0.66, 0.3, matShirt);
-  torsoMesh.position.y = 1.18;
-  torso.add(torsoMesh);
-
-  headGroup = new THREE.Group();
-  headGroup.position.y = 1.74;
-  body.add(headGroup);
-  headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16), matSkin);
-  headMesh.castShadow = true;
-  headGroup.add(headMesh);
-
-  faceGroup = new THREE.Group();
-  headGroup.add(faceGroup);
-  eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), matEye);
-  eyeL.position.set(-0.07, 0.02, 0.18); faceGroup.add(eyeL);
-  eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), matEye);
-  eyeR.position.set(0.07, 0.02, 0.18); faceGroup.add(eyeR);
-
-  browMat = new THREE.MeshBasicMaterial({ color: 0x2a1d16 });
-  browL = meshBox(0.06, 0.012, 0.01, browMat);
-  browL.position.set(-0.07, 0.075, 0.185); faceGroup.add(browL);
-  browR = meshBox(0.06, 0.012, 0.01, browMat);
-  browR.position.set(0.07, 0.075, 0.185); faceGroup.add(browR);
-
-  mouthMesh = meshBox(0.06, 0.02, 0.01, matMouth);
-  mouthMesh.position.set(0, -0.07, 0.19); faceGroup.add(mouthMesh);
-
-  const cheekMatFace = new THREE.MeshBasicMaterial({ color: 0xff8f9f, transparent: true, opacity: 0.5 });
-  const cL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
-  cL.position.set(-0.11, -0.03, 0.16); faceGroup.add(cL);
-  const cR = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
-  cR.position.set(0.11, -0.03, 0.16); faceGroup.add(cR);
-
-  hairGroup = new THREE.Group();
-  headGroup.add(hairGroup);
-
-  armL = createArm(-1); armR = createArm(1);
-  legL = createLeg(-1); legR = createLeg(1);
-
+function initMyPlayer() {
+  myModel = buildCharacterModel({
+    hair: custom.hair, hairColor: custom.hairColor, skinColor: custom.skinColor,
+    shirtColor: custom.shirtColor, sockColor: custom.sockColor, eyeColor: custom.eyeColor,
+    eyeShape: custom.eyeShape, mouth: custom.mouth
+  });
+  scene.add(myModel.group);
   try {
     const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
-    if (saved.x !== undefined) human.position.x = saved.x;
-    if (saved.y !== undefined) human.position.y = saved.y;
-    if (saved.z !== undefined) human.position.z = saved.z;
+    if (saved.x !== undefined) myModel.group.position.x = saved.x;
+    if (saved.y !== undefined) myModel.group.position.y = saved.y;
+    if (saved.z !== undefined) myModel.group.position.z = saved.z;
     if (saved.facing !== undefined) facing = saved.facing;
-    human.rotation.y = facing;
+    myModel.group.rotation.y = facing;
   } catch(e) {}
 }
 
-function createArm(side) {
-  const shoulder = new THREE.Group();
-  shoulder.position.set(side * 0.36, 1.47, 0);
-  body.add(shoulder);
-  const upperArm = meshBox(0.14, 0.32, 0.14, matSkin);
-  upperArm.position.y = -0.16; shoulder.add(upperArm);
-  const elbow = new THREE.Group();
-  elbow.position.y = -0.32; shoulder.add(elbow);
-  const foreArm = meshBox(0.13, 0.3, 0.13, matSkin);
-  foreArm.position.y = -0.15; elbow.add(foreArm);
-  const sleeve = meshBox(0.17, 0.24, 0.17, matShirt);
-  sleeve.position.y = -0.11; shoulder.add(sleeve);
-  return { shoulder, elbow };
-}
-
-function createLeg(side) {
-  const hip = new THREE.Group();
-  hip.position.set(side * 0.14, 0.86, 0);
-  body.add(hip);
-  const thigh = meshBox(0.2, 0.42, 0.2, matSkin);
-  thigh.position.y = -0.21; hip.add(thigh);
-  const knee = new THREE.Group();
-  knee.position.y = -0.42; hip.add(knee);
-  const shin = meshBox(0.18, 0.44, 0.18, matSkin);
-  shin.position.y = -0.22; knee.add(shin);
-  const sock = meshBox(0.235, 0.4, 0.235, matSock);
-  sock.position.y = -0.2; hip.add(sock);
-  return { hip, knee };
-}
-
-// ============================================================
-// カスタマイズ
-// ============================================================
-function buildHair(style) {
-  while (hairGroup.children.length) hairGroup.remove(hairGroup.children[0]);
-  if (style === 'bald') return;
-  const capMat = matHair;
-  if (style === 'short') {
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
-    cap.position.y = 0.02; cap.rotation.x = -0.15; hairGroup.add(cap);
-    const bang = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.06, 0.06), capMat);
-    bang.position.set(0, 0.13, 0.15); bang.rotation.x = -0.3; hairGroup.add(bang);
-  } else if (style === 'long') {
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.6), capMat);
-    cap.position.y = 0.02; cap.rotation.x = -0.12; hairGroup.add(cap);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.5, 0.12), capMat);
-    back.position.set(0, -0.15, -0.13); back.castShadow = true; hairGroup.add(back);
-    for (const s of [-1, 1]) {
-      const side = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.32, 0.14), capMat);
-      side.position.set(s * 0.19, -0.05, -0.02); hairGroup.add(side);
-    }
-  } else if (style === 'twin') {
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
-    cap.position.y = 0.02; cap.rotation.x = -0.15; hairGroup.add(cap);
-    for (const s of [-1, 1]) {
-      const tailBase = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), capMat);
-      tailBase.position.set(s * 0.19, 0.0, -0.05); hairGroup.add(tailBase);
-      const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.03, 0.4, 8), capMat);
-      tail.position.set(s * 0.25, -0.2, -0.08); tail.rotation.z = s * 0.3; tail.castShadow = true; hairGroup.add(tail);
-    }
-  } else if (style === 'bob') {
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.215, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), capMat);
-    cap.position.y = 0.02; cap.rotation.x = -0.1; hairGroup.add(cap);
-    for (const s of [-1, 1]) {
-      const side = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.22, 0.16), capMat);
-      side.position.set(s * 0.2, -0.05, -0.02); side.castShadow = true; hairGroup.add(side);
-    }
-  }
-}
-
-function applyCustomization() {
-  if (!matSkin) return;
-  matSkin.color.set(custom.skinColor);
-  matShirt.color.set(custom.shirtColor);
-  matSock.color.set(custom.sockColor);
-  matHair.color.set(custom.hairColor);
-  matEye.color.set(custom.eyeColor);
-  browMat.color.set(custom.hairColor);
-  buildHair(custom.hair);
-
-  eyeL.scale.set(1, 1, 1); eyeR.scale.set(1, 1, 1);
-  eyeL.rotation.set(0, 0, 0); eyeR.rotation.set(0, 0, 0);
-  eyeL.visible = true; eyeR.visible = true;
-  if (custom.eyeShape === 'happy') { eyeL.scale.set(1, 0.5, 1); eyeR.scale.set(1, 0.5, 1); }
-  else if (custom.eyeShape === 'sharp') { eyeL.rotation.z = 0.4; eyeR.rotation.z = -0.4; eyeL.scale.set(1, 0.8, 1); eyeR.scale.set(1, 0.8, 1); }
-  else if (custom.eyeShape === 'closed') { eyeL.visible = false; eyeR.visible = false; }
-
-  mouthMesh.scale.set(1, 1, 1);
-  if (custom.mouth === 'smile') mouthMesh.scale.set(1.2, 0.6, 1);
-  else if (custom.mouth === 'open') mouthMesh.scale.set(1, 2.2, 1);
-  else if (custom.mouth === 'neutral') mouthMesh.scale.set(1, 0.4, 1);
-  else if (custom.mouth === 'cat') mouthMesh.scale.set(1.2, 0.7, 1);
+function applyMyCustomization() {
+  if (!myModel) return;
+  myModel.matSkin.color.set(custom.skinColor);
+  myModel.matShirt.color.set(custom.shirtColor);
+  myModel.matSock.color.set(custom.sockColor);
+  myModel.matHair.color.set(custom.hairColor);
+  myModel.matEye.color.set(custom.eyeColor);
+  myModel.browMat.color.set(custom.hairColor);
+  buildHairOn(myModel, custom.hair);
+  applyFaceOn(myModel, custom);
 }
 
 function refreshCustomUI() {
@@ -716,56 +657,53 @@ function refreshCustomUI() {
 }
 
 // ============================================================
-// リモートプレイヤー
+// リモートプレイヤー（同じモデル構築＋補間）
 // ============================================================
 function createRemotePlayer(uid, data) {
-  const g = new THREE.Group();
-  const bodyG = new THREE.Group(); g.add(bodyG);
-
-  const skinMat = new THREE.MeshStandardMaterial({ color: data.skinColor || 0xb97a4b, roughness: 0.8 });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: data.shirtColor || 0x1b2a5c, roughness: 0.7 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: data.hairColor || 0x2a1d16, roughness: 0.8 });
-
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.66, 0.3), shirtMat);
-  torso.position.y = 1.18; torso.castShadow = true; bodyG.add(torso);
-
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16), skinMat);
-  head.position.y = 1.74; head.castShadow = true; bodyG.add(head);
-
-  if (data.hair && data.hair !== 'bald') {
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
-    cap.position.y = 1.76; cap.rotation.x = -0.15; bodyG.add(cap);
-  }
-
-  const eyeMat = new THREE.MeshBasicMaterial({ color: data.eyeColor || 0x111111 });
-  for (const s of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 6, 6), eyeMat);
-    eye.position.set(s * 0.07, 1.76, 0.18); bodyG.add(eye);
-  }
-
-  const arms = [];
-  for (const side of [-1, 1]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.6, 0.14), skinMat);
-    arm.position.set(side * 0.36, 1.1, 0); arm.castShadow = true; bodyG.add(arm); arms.push(arm);
-  }
-
-  const legs = [];
-  for (const side of [-1, 1]) {
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.8, 0.2), skinMat);
-    leg.position.set(side * 0.14, 0.4, 0); leg.castShadow = true; bodyG.add(leg); legs.push(leg);
-  }
-
-  g.userData = { uid, bodyG, arms, legs, head, skinMat, shirtMat, hairMat, eyeMat };
-  scene.add(g);
-  return g;
+  const model = buildCharacterModel(data);
+  scene.add(model.group);
+  const rp = {
+    group: model.group,
+    model,
+    target: null,
+    current: {
+      alx:0,aly:0,alz:0,aex:0, arx:0,ary:0,arz:0,aex2:0,
+      llx:0,lly:0,llz:0,lkx:0,lky:0, rlx:0,rly:0,rlz:0,rkx:0,rky:0,
+      bx:0,by:0,bz:0, bpy:0, hx:0,hy:0,hz:0
+    }
+  };
+  remotePlayers[uid] = rp;
+  return rp;
 }
 
 function removeRemotePlayer(uid) {
   const rp = remotePlayers[uid];
   if (rp) {
-    if (rp.userData.bubbleEl) rp.userData.bubbleEl.remove();
-    scene.remove(rp);
+    scene.remove(rp.group);
     delete remotePlayers[uid];
+  }
+}
+
+function applyRot(rp, r) {
+  if (!r) return;
+  const m = rp.model;
+  m.armL.shoulder.rotation.set(r.alx||0, r.aly||0, r.alz||0);
+  m.armL.elbow.rotation.x = r.aex||0;
+  m.armR.shoulder.rotation.set(r.arx||0, r.ary||0, r.arz||0);
+  m.armR.elbow.rotation.x = r.aex2||0;
+  m.legL.hip.rotation.set(r.llx||0, r.lly||0, r.llz||0);
+  m.legL.knee.rotation.set(r.lkx||0, r.lky||0, 0);
+  m.legR.hip.rotation.set(r.rlx||0, r.rly||0, r.rlz||0);
+  m.legR.knee.rotation.set(r.rkx||0, r.rky||0, 0);
+  m.body.rotation.set(r.bx||0, r.by||0, r.bz||0);
+  m.body.position.y = r.bpy||0;
+  m.headGroup.rotation.set(r.hx||0, r.hy||0, r.hz||0);
+}
+
+function lerpRot(cur, tgt, t) {
+  for (const k in tgt) {
+    if (cur[k] === undefined) cur[k] = tgt[k];
+    cur[k] += (tgt[k] - cur[k]) * t;
   }
 }
 
@@ -787,39 +725,39 @@ function setupRemotePlayersListener() {
       if (now - (p.lastSeen || 0) > 30000) { removeRemotePlayer(uid); continue; }
 
       let rp = remotePlayers[uid];
-      if (!rp) { rp = createRemotePlayer(uid, p); remotePlayers[uid] = rp; }
+      if (!rp) rp = createRemotePlayer(uid, p);
 
-      const ud = rp.userData;
-      ud.skinMat.color.set(p.skinColor || '#b97a4b');
-      ud.shirtMat.color.set(p.shirtColor || '#1b2a5c');
-      ud.hairMat.color.set(p.hairColor || '#2a1d16');
-      ud.eyeMat.color.set(p.eyeColor || '#111111');
-
-      rp.position.set(p.x || 0, p.y || 0, p.z || 0);
-      rp.rotation.y = p.facing || 0;
-
-      const bG = ud.bodyG, arms = ud.arms, legs = ud.legs;
-      bG.position.y = 0; bG.rotation.x = 0; bG.rotation.y = 0;
-      arms[0].rotation.set(0, 0, 0); arms[1].rotation.set(0, 0, 0);
-      legs[0].rotation.set(0, 0, 0); legs[1].rotation.set(0, 0, 0);
-
-      if (p.pose === 'sit') {
-        bG.position.y = -0.55;
-        legs[0].rotation.x = -1.3; legs[1].rotation.x = -1.3;
-        arms[0].rotation.x = -0.5; arms[1].rotation.x = -0.5;
-      } else if (p.pose && p.pose.startsWith('emote_')) {
-        const en = p.pose.slice(6);
-        if (en === 'wave') { arms[1].rotation.x = -2.5; arms[1].rotation.z = 0.3; }
-        else if (en === 'cheer') { arms[0].rotation.x = -2.5; arms[1].rotation.x = -2.5; }
-        else if (en === 'dance') { bG.rotation.y = Math.sin(now / 200) * 0.3; arms[0].rotation.x = -1.5; arms[1].rotation.x = -1.5; }
-        else if (en === 'think') { arms[1].rotation.x = -1.9; arms[1].rotation.z = 0.5; }
-        else if (en === 'stretch') { arms[0].rotation.x = -3; arms[1].rotation.x = -3; }
-      } else if (p.pose === 'jump') {
-        legs[0].rotation.x = -0.5; legs[1].rotation.x = 0.4;
-        arms[0].rotation.x = -2; arms[1].rotation.x = -2;
+      // 色・外見
+      const m = rp.model;
+      m.matSkin.color.set(p.skinColor || '#b97a4b');
+      m.matShirt.color.set(p.shirtColor || '#1b2a5c');
+      m.matHair.color.set(p.hairColor || '#2a1d16');
+      m.matEye.color.set(p.eyeColor || '#111111');
+      if (rp._hair !== p.hair) { buildHairOn(m, p.hair || 'short'); rp._hair = p.hair; }
+      if (rp._eyeShape !== p.eyeShape || rp._mouth !== p.mouth) {
+        applyFaceOn(m, { eyeShape: p.eyeShape, mouth: p.mouth });
+        rp._eyeShape = p.eyeShape; rp._mouth = p.mouth;
       }
+
+      // 位置
+      rp.group.position.set(p.x || 0, p.y || 0, p.z || 0);
+      rp.group.rotation.y = p.facing || 0;
+
+      // 関節角度の目標を更新
+      if (p.rot) rp.target = p.rot;
     }
   });
+}
+
+// 毎フレーム、リモートの関節を補間
+function updateRemotePlayers(dt) {
+  const t = Math.min(1, dt * 18); // 補間係数
+  for (const uid in remotePlayers) {
+    const rp = remotePlayers[uid];
+    if (!rp.target) continue;
+    lerpRot(rp.current, rp.target, t);
+    applyRot(rp, rp.current);
+  }
 }
 
 // ============================================================
@@ -858,18 +796,13 @@ function showRemoteBubble(uid, name, text, duration) {
   remoteBubbles.push({ el, uid, life: duration / 1000, age: 0 });
 }
 
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function updateBubbles(dt) {
   const v = new THREE.Vector3();
-
   if (localBubble) {
     localBubble.age += dt;
-    v.set(human.position.x, human.position.y + 2.25, human.position.z);
+    v.set(myModel.group.position.x, myModel.group.position.y + 2.25, myModel.group.position.z);
     v.project(camera);
     if (v.z > 1) localBubble.el.style.opacity = '0';
     else {
@@ -879,13 +812,12 @@ function updateBubbles(dt) {
     }
     if (localBubble.age >= localBubble.life) { localBubble.el.remove(); localBubble = null; }
   }
-
   for (let i = remoteBubbles.length - 1; i >= 0; i--) {
     const b = remoteBubbles[i];
     b.age += dt;
     const rp = remotePlayers[b.uid];
     if (!rp) { b.el.remove(); remoteBubbles.splice(i, 1); continue; }
-    v.set(rp.position.x, rp.position.y + 2.3, rp.position.z);
+    v.set(rp.group.position.x, rp.group.position.y + 2.3, rp.group.position.z);
     v.project(camera);
     if (v.z > 1) b.el.style.opacity = '0';
     else {
@@ -898,12 +830,7 @@ function updateBubbles(dt) {
 }
 
 function sendChatMessage(text) {
-  push(ref(db, 'chat'), {
-    uid: PLAYER_ID,
-    name: playerName,
-    text: text,
-    time: Date.now()
-  }).catch(err => console.error('chat send failed:', err));
+  push(ref(db, 'chat'), { uid: PLAYER_ID, name: playerName, text, time: Date.now() }).catch(err => console.error(err));
 }
 
 // ============================================================
@@ -911,10 +838,7 @@ function sendChatMessage(text) {
 // ============================================================
 function setupInput() {
   addEventListener('keydown', (e) => {
-    if (document.activeElement === chatInput) {
-      if (e.key === 'Escape') closeChat();
-      return;
-    }
+    if (document.activeElement === chatInput) { if (e.key === 'Escape') closeChat(); return; }
     keys[e.code] = true;
     if (e.code === 'Space') e.preventDefault();
     if (e.code === 'KeyC' && !e.repeat) toggleSit();
@@ -937,43 +861,30 @@ function setupInput() {
   stick.addEventListener('pointerdown', (e) => { stickId = e.pointerId; stick.setPointerCapture(e.pointerId); stickMove(e); });
   stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) stickMove(e); });
   const stickEnd = (e) => { if (e.pointerId === stickId) { stickId = null; joy.x = joy.y = 0; knob.style.transform = ''; } };
-  stick.addEventListener('pointerup', stickEnd);
-  stick.addEventListener('pointercancel', stickEnd);
+  stick.addEventListener('pointerup', stickEnd); stick.addEventListener('pointercancel', stickEnd);
 
   const jb = document.getElementById('jump');
   jb.addEventListener('pointerdown', () => jumpBtn = true);
   jb.addEventListener('pointerup', () => jumpBtn = false);
 
   const ptrs = new Map();
-  canvas.addEventListener('pointerdown', (e) => {
-    ptrs.set(e.pointerId, [e.clientX, e.clientY]);
-    canvas.setPointerCapture(e.pointerId);
-  });
+  canvas.addEventListener('pointerdown', (e) => { ptrs.set(e.pointerId, [e.clientX, e.clientY]); canvas.setPointerCapture(e.pointerId); });
   canvas.addEventListener('pointermove', (e) => {
-    const p = ptrs.get(e.pointerId);
-    if (!p) return;
+    const p = ptrs.get(e.pointerId); if (!p) return;
     yaw -= (e.clientX - p[0]) * 0.006;
     pitch = Math.min(1.35, Math.max(-0.1, pitch + (e.clientY - p[1]) * 0.005));
     p[0] = e.clientX; p[1] = e.clientY;
   });
   const up = (e) => ptrs.delete(e.pointerId);
-  canvas.addEventListener('pointerup', up);
-  canvas.addEventListener('pointercancel', up);
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    dist = Math.min(20, Math.max(2.5, dist + e.deltaY * 0.01));
-  }, { passive: false });
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); dist = Math.min(20, Math.max(2.5, dist + e.deltaY * 0.01)); }, { passive: false });
 }
 
 // ============================================================
 // UI
 // ============================================================
 function setupUI() {
-  document.getElementById('uiToggle').addEventListener('click', () => {
-    hudHidden = !hudHidden;
-    applyHudVisibility();
-    saveLocal();
-  });
+  document.getElementById('uiToggle').addEventListener('click', () => { hudHidden = !hudHidden; applyHudVisibility(); saveLocal(); });
   applyHudVisibility();
 
   document.getElementById('customBtn').addEventListener('click', () => customPanel.classList.toggle('open'));
@@ -982,65 +893,46 @@ function setupUI() {
   });
 
   document.getElementById('hairOpts').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-hair]');
-    if (!b) return;
-    custom.hair = b.dataset.hair;
-    refreshCustomUI(); applyCustomization(); saveLocal();
+    const b = e.target.closest('button[data-hair]'); if (!b) return;
+    custom.hair = b.dataset.hair; refreshCustomUI(); applyMyCustomization(); saveLocal();
     if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { hair: custom.hair }).catch(() => {});
   });
   document.getElementById('eyeShapeOpts').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-eye]');
-    if (!b) return;
-    custom.eyeShape = b.dataset.eye;
-    refreshCustomUI(); applyCustomization(); saveLocal();
+    const b = e.target.closest('button[data-eye]'); if (!b) return;
+    custom.eyeShape = b.dataset.eye; refreshCustomUI(); applyMyCustomization(); saveLocal();
+    if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { eyeShape: custom.eyeShape }).catch(() => {});
   });
   document.getElementById('mouthOpts').addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-mouth]');
-    if (!b) return;
-    custom.mouth = b.dataset.mouth;
-    refreshCustomUI(); applyCustomization(); saveLocal();
+    const b = e.target.closest('button[data-mouth]'); if (!b) return;
+    custom.mouth = b.dataset.mouth; refreshCustomUI(); applyMyCustomization(); saveLocal();
+    if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { mouth: custom.mouth }).catch(() => {});
   });
-
   ['hairColor', 'skinColor', 'shirtColor', 'sockColor', 'eyeColor'].forEach(id => {
     document.getElementById(id).addEventListener('input', (e) => {
-      custom[id] = e.target.value;
-      applyCustomization(); saveLocal();
-      if (PLAYER_ID && ['skinColor', 'shirtColor', 'hairColor', 'eyeColor'].includes(id)) {
-        update(ref(db, 'players/' + PLAYER_ID), { [id]: custom[id] }).catch(() => {});
-      }
+      custom[id] = e.target.value; applyMyCustomization(); saveLocal();
+      if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { [id]: custom[id] }).catch(() => {});
     });
   });
 
   document.getElementById('nameCustom').addEventListener('change', (e) => {
     const v = (e.target.value || '').trim().slice(0, 16);
-    if (v) {
-      playerName = v;
-      saveLocal();
-      if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { name: playerName }).catch(() => {});
-    }
+    if (v) { playerName = v; saveLocal(); if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { name: playerName }).catch(() => {}); }
   });
 
   document.getElementById('sitBtn').addEventListener('click', toggleSit);
   document.getElementById('emoteBtn').addEventListener('click', toggleEmotePanel);
-  document.getElementById('chatBtn').addEventListener('click', () => {
-    if (chatBar.classList.contains('open')) closeChat();
-    else openChat();
-  });
+  document.getElementById('chatBtn').addEventListener('click', () => { if (chatBar.classList.contains('open')) closeChat(); else openChat(); });
 
   emotePanel.querySelectorAll('button[data-emote]').forEach(btn => {
     btn.addEventListener('click', () => startEmote(btn.dataset.emote));
   });
-
   chatSendBtn.addEventListener('click', doSendChat);
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); doSendChat(); }
     if (e.key === 'Escape') closeChat();
   });
-
   document.addEventListener('pointerdown', (e) => {
-    if (emotePanel.classList.contains('open') && !emotePanel.contains(e.target) && e.target.id !== 'emoteBtn') {
-      emotePanel.classList.remove('open');
-    }
+    if (emotePanel.classList.contains('open') && !emotePanel.contains(e.target) && e.target.id !== 'emoteBtn') emotePanel.classList.remove('open');
   }, true);
 }
 
@@ -1048,118 +940,52 @@ function applyHudVisibility() {
   hudEl.classList.toggle('hidden', hudHidden);
   document.getElementById('uiToggle').textContent = hudHidden ? 'UI 表示' : 'UI 非表示';
 }
-
 function openChat() { chatBar.classList.add('open'); chatInput.focus(); }
 function closeChat() { chatBar.classList.remove('open'); chatInput.blur(); }
-
 function doSendChat() {
   const text = chatInput.value.trim();
   if (!text) { closeChat(); return; }
-  chatInput.value = '';
-  closeChat();
-  showLocalBubble(text, 4000);
-  addChatLog(playerName, text);
-  sendChatMessage(text);
+  chatInput.value = ''; closeChat();
+  showLocalBubble(text, 4000); addChatLog(playerName, text); sendChatMessage(text);
 }
-
 function toggleSit() {
   if (emoteName) return;
   sitting = !sitting;
   document.getElementById('sitBtn').textContent = sitting ? '立つ' : 'あぐら';
   showToast(sitting ? 'あぐらをかきました' : '立ちました');
 }
-
 function toggleEmotePanel() {
   if (emotePanel.classList.contains('open')) emotePanel.classList.remove('open');
-  else {
-    if (sitting) { sitting = false; document.getElementById('sitBtn').textContent = 'あぐら'; }
-    emotePanel.classList.add('open');
-  }
+  else { if (sitting) { sitting = false; document.getElementById('sitBtn').textContent = 'あぐら'; } emotePanel.classList.add('open'); }
 }
-
 function startEmote(name) {
   emotePanel.classList.remove('open');
   if (sitting) { sitting = false; document.getElementById('sitBtn').textContent = 'あぐら'; }
-  emoteName = name;
-  emoteTime = 0;
+  emoteName = name; emoteTime = 0;
   const labels = { wave: '👋 手を振る', cheer: '🙌 喜ぶ', dance: '💃 踊る', think: '🤔 考える', stretch: '🙆 伸びをする' };
   showToast(labels[name] || name);
 }
-
 let toastTimer = 0;
 function showToast(msg) {
-  toastEl.textContent = msg;
-  toastEl.style.opacity = '1';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
+  toastEl.textContent = msg; toastEl.style.opacity = '1';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
 }
-
 function updateAcornUI() { acornsEl.textContent = acornCount; }
 
-// ============================================================
-// ローカル保存
-// ============================================================
 function saveLocal() {
-  if (!human) return;
+  if (!myModel) return;
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      x: human.position.x, y: human.position.y, z: human.position.z,
+      x: myModel.group.position.x, y: myModel.group.position.y, z: myModel.group.position.z,
       facing, yaw, pitch, dist, custom, playerName, hudHidden
     }));
   } catch(e) {}
 }
 
 // ============================================================
-// ポーズリセット
+// ポーズ計算（ローカル）
 // ============================================================
-function resetPose() {
-  armL.shoulder.rotation.set(0, 0, 0);
-  armR.shoulder.rotation.set(0, 0, 0);
-  armL.elbow.rotation.set(0, 0, 0);
-  armR.elbow.rotation.set(0, 0, 0);
-  legL.hip.rotation.set(0, 0, 0);
-  legR.hip.rotation.set(0, 0, 0);
-  legL.knee.rotation.set(0, 0, 0);
-  legR.knee.rotation.set(0, 0, 0);
-  body.rotation.set(0, 0, 0);
-  body.position.y = 0;
-  legL.hip.position.set(-0.14, 0.86, 0);
-  legR.hip.position.set(0.14, 0.86, 0);
-  torsoMesh.rotation.set(0, 0, 0);
-  headGroup.rotation.set(0, 0, 0);
-}
-
-// ============================================================
-// Firebase 同期
-// ============================================================
-function syncMyState(dt, force = false) {
-  if (!PLAYER_ID || !human) return;
-  lastSync += dt;
-  if (!force && lastSync < SYNC_INTERVAL) return;
-  lastSync = 0;
-
-  let pose = 'stand';
-  if (sitting) pose = 'sit';
-  else if (emoteName) pose = 'emote_' + emoteName;
-  else if (!onGround) pose = 'jump';
-  else if (Math.hypot(vel.x, vel.z) > 0.1) pose = 'walk';
-
-  update(ref(db, 'players/' + PLAYER_ID), {
-    x: human.position.x, y: human.position.y, z: human.position.z,
-    facing: facing, pose: pose, lastSeen: Date.now()
-  }).catch(() => {});
-}
-
-// ============================================================
-// メインループ
-// ============================================================
-function loop(now) {
-  requestAnimationFrame(loop);
-  if (!renderer || !gameStarted || !human) return;
-
-  const dt = Math.min(0.05, (now - lastTime) / 1000 || 0.016);
-  lastTime = now;
-
+function computeLocalPose(now, dt) {
   const chatting = document.activeElement === chatInput;
   let ix = 0, iz = 0;
   if (!chatting) {
@@ -1167,7 +993,6 @@ function loop(now) {
     iz = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) + joy.y;
   }
   const mag = Math.min(1, Math.hypot(ix, iz));
-
   if (mag > 0.05 && sitting) { sitting = false; document.getElementById('sitBtn').textContent = 'あぐら'; }
   if (mag > 0.05 && emoteName && emoteName !== 'dance') emoteName = null;
 
@@ -1175,6 +1000,7 @@ function loop(now) {
   const speed = (run ? 8 : 4) * mag;
   const canMove = !sitting && !emoteName && !chatting;
 
+  const g = myModel.group;
   if (canMove && mag > 0) {
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     const rx = Math.cos(yaw), rz = -Math.sin(yaw);
@@ -1183,92 +1009,142 @@ function loop(now) {
     vel.x += (dx * speed - vel.x) * Math.min(1, dt * 10);
     vel.z += (dz * speed - vel.z) * Math.min(1, dt * 10);
     const target = Math.atan2(dx, dz);
-    let d = target - facing;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
+    let d = target - facing; d = Math.atan2(Math.sin(d), Math.cos(d));
     facing += d * Math.min(1, dt * 12);
   } else {
     vel.x *= Math.max(0, 1 - dt * 10);
     vel.z *= Math.max(0, 1 - dt * 10);
   }
-
   if ((keys.Space || jumpBtn) && onGround && !sitting && !emoteName && !chatting) { vy = 7; onGround = false; }
   vy -= 20 * dt;
-  human.position.y += vy * dt;
-  if (human.position.y <= 0) { human.position.y = 0; vy = 0; onGround = true; }
-  human.position.x += vel.x * dt;
-  human.position.z += vel.z * dt;
-  human.rotation.y = facing;
+  g.position.y += vy * dt;
+  if (g.position.y <= 0) { g.position.y = 0; vy = 0; onGround = true; }
+  g.position.x += vel.x * dt;
+  g.position.z += vel.z * dt;
+  g.rotation.y = facing;
 
   const sp = Math.hypot(vel.x, vel.z);
   phase += dt * (sp * 1.6);
   const amp = Math.min(1, sp / 4) * (sp > 6 ? 0.95 : 0.65);
   const swing = Math.sin(phase) * amp;
 
-  resetPose();
+  // リセット
+  const m = myModel;
+  m.armL.shoulder.rotation.set(0,0,0); m.armR.shoulder.rotation.set(0,0,0);
+  m.armL.elbow.rotation.set(0,0,0); m.armR.elbow.rotation.set(0,0,0);
+  m.legL.hip.rotation.set(0,0,0); m.legR.hip.rotation.set(0,0,0);
+  m.legL.knee.rotation.set(0,0,0); m.legR.knee.rotation.set(0,0,0);
+  m.body.rotation.set(0,0,0); m.body.position.y = 0;
+  m.legL.hip.position.set(-0.14, 0.86, 0);
+  m.legR.hip.position.set(0.14, 0.86, 0);
+  m.headGroup.rotation.set(0,0,0);
 
   if (sitting) {
-    body.position.y = -0.55;
-    legL.hip.rotation.y = 1.1; legR.hip.rotation.y = -1.1;
-    legL.hip.rotation.x = -1.35; legR.hip.rotation.x = -1.35;
-    legL.hip.rotation.z = 0.15; legR.hip.rotation.z = -0.15;
-    legL.knee.rotation.x = 2.0; legL.knee.rotation.y = -0.6;
-    legR.knee.rotation.x = 2.0; legR.knee.rotation.y = 0.6;
-    armL.shoulder.rotation.x = -0.6; armR.shoulder.rotation.x = -0.6;
-    armL.shoulder.rotation.z = -0.25; armR.shoulder.rotation.z = 0.25;
-    armL.elbow.rotation.x = -0.7; armR.elbow.rotation.x = -0.7;
-    body.rotation.x = 0.08;
+    m.body.position.y = -0.55;
+    m.legL.hip.rotation.y = 1.1; m.legR.hip.rotation.y = -1.1;
+    m.legL.hip.rotation.x = -1.35; m.legR.hip.rotation.x = -1.35;
+    m.legL.hip.rotation.z = 0.15; m.legR.hip.rotation.z = -0.15;
+    m.legL.knee.rotation.x = 2.0; m.legL.knee.rotation.y = -0.6;
+    m.legR.knee.rotation.x = 2.0; m.legR.knee.rotation.y = 0.6;
+    m.armL.shoulder.rotation.x = -0.6; m.armR.shoulder.rotation.x = -0.6;
+    m.armL.shoulder.rotation.z = -0.25; m.armR.shoulder.rotation.z = 0.25;
+    m.armL.elbow.rotation.x = -0.7; m.armR.elbow.rotation.x = -0.7;
+    m.body.rotation.x = 0.08;
   } else if (emoteName) {
     emoteTime += dt;
     const et = emoteTime;
     if (emoteName === 'wave') {
-      armR.shoulder.rotation.x = -2.6;
-      armR.shoulder.rotation.z = 0.3 + Math.sin(et * 10) * 0.5;
-      armR.elbow.rotation.x = -0.2;
-      armL.shoulder.rotation.x = swing * -0.3;
-      armL.elbow.rotation.x = -0.3;
+      m.armR.shoulder.rotation.x = -2.6;
+      m.armR.shoulder.rotation.z = 0.3 + Math.sin(et * 10) * 0.5;
+      m.armR.elbow.rotation.x = -0.2;
+      m.armL.shoulder.rotation.x = swing * -0.3;
+      m.armL.elbow.rotation.x = -0.3;
       if (et > 2.2) emoteName = null;
     } else if (emoteName === 'cheer') {
-      body.position.y = Math.abs(Math.sin(et * 6)) * 0.15;
-      armL.shoulder.rotation.x = -2.8; armR.shoulder.rotation.x = -2.8;
-      armL.shoulder.rotation.z = -0.25; armR.shoulder.rotation.z = 0.25;
+      m.body.position.y = Math.abs(Math.sin(et * 6)) * 0.15;
+      m.armL.shoulder.rotation.x = -2.8; m.armR.shoulder.rotation.x = -2.8;
+      m.armL.shoulder.rotation.z = -0.25; m.armR.shoulder.rotation.z = 0.25;
       if (et > 1.8) emoteName = null;
     } else if (emoteName === 'dance') {
-      body.position.y = Math.abs(Math.sin(et * 5)) * 0.08;
-      body.rotation.x = Math.sin(et * 5) * 0.15;
-      body.rotation.y = Math.sin(et * 5) * 0.3;
-      armL.shoulder.rotation.x = -1.8 + Math.sin(et * 6) * 0.5;
-      armR.shoulder.rotation.x = -1.8 - Math.sin(et * 6) * 0.5;
-      armL.shoulder.rotation.z = -0.6; armR.shoulder.rotation.z = 0.6;
-      if (et > 3.5) { emoteName = null; body.rotation.y = 0; }
+      m.body.position.y = Math.abs(Math.sin(et * 5)) * 0.08;
+      m.body.rotation.x = Math.sin(et * 5) * 0.15;
+      m.body.rotation.y = Math.sin(et * 5) * 0.3;
+      m.armL.shoulder.rotation.x = -1.8 + Math.sin(et * 6) * 0.5;
+      m.armR.shoulder.rotation.x = -1.8 - Math.sin(et * 6) * 0.5;
+      m.armL.shoulder.rotation.z = -0.6; m.armR.shoulder.rotation.z = 0.6;
+      if (et > 3.5) { emoteName = null; m.body.rotation.y = 0; }
     } else if (emoteName === 'think') {
-      armR.shoulder.rotation.x = -1.9; armR.shoulder.rotation.z = 0.5;
-      armR.elbow.rotation.x = -1.9;
-      armL.shoulder.rotation.x = -0.2; armL.elbow.rotation.x = -0.5;
-      headGroup.rotation.z = 0.25; headGroup.rotation.x = 0.1;
-      if (et > 2.5) { emoteName = null; headGroup.rotation.set(0, 0, 0); }
+      m.armR.shoulder.rotation.x = -1.9; m.armR.shoulder.rotation.z = 0.5;
+      m.armR.elbow.rotation.x = -1.9;
+      m.armL.shoulder.rotation.x = -0.2; m.armL.elbow.rotation.x = -0.5;
+      m.headGroup.rotation.z = 0.25; m.headGroup.rotation.x = 0.1;
+      if (et > 2.5) { emoteName = null; m.headGroup.rotation.set(0,0,0); }
     } else if (emoteName === 'stretch') {
       const p = Math.min(1, et * 2);
-      body.position.y = Math.sin(p * Math.PI) * 0.1;
-      armL.shoulder.rotation.x = -3; armR.shoulder.rotation.x = -3;
-      body.rotation.x = -Math.sin(p * Math.PI) * 0.12;
+      m.body.position.y = Math.sin(p * Math.PI) * 0.1;
+      m.armL.shoulder.rotation.x = -3; m.armR.shoulder.rotation.x = -3;
+      m.body.rotation.x = -Math.sin(p * Math.PI) * 0.12;
       if (et > 2.5) emoteName = null;
     }
   } else {
     if (!onGround) {
-      armL.shoulder.rotation.x = -2.4; armR.shoulder.rotation.x = -2.4;
-      legL.hip.rotation.x = -0.5; legR.hip.rotation.x = 0.4;
+      m.armL.shoulder.rotation.x = -2.4; m.armR.shoulder.rotation.x = -2.4;
+      m.legL.hip.rotation.x = -0.5; m.legR.hip.rotation.x = 0.4;
     } else {
-      legL.hip.rotation.x = swing; legR.hip.rotation.x = -swing;
-      legL.knee.rotation.x = Math.max(0, -swing * 0.8);
-      legR.knee.rotation.x = Math.max(0, swing * 0.8);
-      armL.shoulder.rotation.x = -swing * 0.9; armR.shoulder.rotation.x = swing * 0.9;
-      armL.elbow.rotation.x = -0.3 - Math.abs(swing) * 0.3;
-      armR.elbow.rotation.x = -0.3 - Math.abs(swing) * 0.3;
+      m.legL.hip.rotation.x = swing; m.legR.hip.rotation.x = -swing;
+      m.legL.knee.rotation.x = Math.max(0, -swing * 0.8);
+      m.legR.knee.rotation.x = Math.max(0, swing * 0.8);
+      m.armL.shoulder.rotation.x = -swing * 0.9; m.armR.shoulder.rotation.x = swing * 0.9;
+      m.armL.elbow.rotation.x = -0.3 - Math.abs(swing) * 0.3;
+      m.armR.elbow.rotation.x = -0.3 - Math.abs(swing) * 0.3;
     }
-    body.position.y = onGround ? Math.abs(Math.cos(phase)) * 0.06 * amp + Math.sin(now / 500) * 0.008 : 0;
-    body.rotation.x = Math.min(0.2, sp * 0.025);
+    m.body.position.y = onGround ? Math.abs(Math.cos(phase)) * 0.06 * amp + Math.sin(now / 500) * 0.008 : 0;
+    m.body.rotation.x = Math.min(0.2, sp * 0.025);
   }
+}
 
+// ============================================================
+// Firebase 同期
+// ============================================================
+function syncMyState(dt) {
+  if (!PLAYER_ID || !myModel) return;
+  lastSync += dt;
+  if (lastSync < SYNC_INTERVAL) return;
+  lastSync = 0;
+  const m = myModel;
+  let pose = 'stand';
+  if (sitting) pose = 'sit';
+  else if (emoteName) pose = 'emote_' + emoteName;
+  else if (!onGround) pose = 'jump';
+  else if (Math.hypot(vel.x, vel.z) > 0.1) pose = 'walk';
+
+  update(ref(db, 'players/' + PLAYER_ID), {
+    x: m.group.position.x, y: m.group.position.y, z: m.group.position.z,
+    facing: facing, pose, lastSeen: Date.now(),
+    rot: {
+      alx: m.armL.shoulder.rotation.x, aly: m.armL.shoulder.rotation.y, alz: m.armL.shoulder.rotation.z, aex: m.armL.elbow.rotation.x,
+      arx: m.armR.shoulder.rotation.x, ary: m.armR.shoulder.rotation.y, arz: m.armR.shoulder.rotation.z, aex2: m.armR.elbow.rotation.x,
+      llx: m.legL.hip.rotation.x, lly: m.legL.hip.rotation.y, llz: m.legL.hip.rotation.z, lkx: m.legL.knee.rotation.x, lky: m.legL.knee.rotation.y,
+      rlx: m.legR.hip.rotation.x, rly: m.legR.hip.rotation.y, rlz: m.legR.hip.rotation.z, rkx: m.legR.knee.rotation.x, rky: m.legR.knee.rotation.y,
+      bx: m.body.rotation.x, by: m.body.rotation.y, bz: m.body.rotation.z, bpy: m.body.position.y,
+      hx: m.headGroup.rotation.x, hy: m.headGroup.rotation.y, hz: m.headGroup.rotation.z
+    }
+  }).catch(() => {});
+}
+
+// ============================================================
+// メインループ
+// ============================================================
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (!renderer || !gameStarted || !myModel) return;
+
+  const dt = Math.min(0.05, (now - lastTime) / 1000 || 0.016);
+  lastTime = now;
+
+  computeLocalPose(now, dt);
+
+  // 妖精
   fairies.forEach(f => {
     if (f.collected) return;
     const bob = Math.sin(now / 500 + f.phase) * 0.12;
@@ -1279,18 +1155,18 @@ function loop(now) {
       f.aura.scale.set(s, s, s);
       f.aura.material.opacity = 0.1 + Math.sin(now / 333 + f.phase) * 0.05;
     }
-    const dx = human.position.x - f.group.position.x;
-    const dz = human.position.z - f.group.position.z;
-    if (Math.hypot(dx, dz) < 1.3 && Math.abs(human.position.y - 0.5) < 1.5) {
-      f.collected = true;
-      f.group.visible = false;
-      acornCount++;
-      updateAcornUI();
-      showToast('🌰 どんぐりをゲット！');
+    const dx = myModel.group.position.x - f.group.position.x;
+    const dz = myModel.group.position.z - f.group.position.z;
+    if (Math.hypot(dx, dz) < 1.3 && Math.abs(myModel.group.position.y - 0.5) < 1.5) {
+      f.collected = true; f.group.visible = false;
+      acornCount++; updateAcornUI(); showToast('🌰 どんぐりをゲット！');
     }
   });
 
-  const tx = human.position.x, ty = human.position.y + 1.2, tz = human.position.z;
+  // リモート補間
+  updateRemotePlayers(dt);
+
+  const tx = myModel.group.position.x, ty = myModel.group.position.y + 1.2, tz = myModel.group.position.z;
   camera.position.set(
     tx + Math.sin(yaw) * Math.cos(pitch) * dist,
     ty + Math.sin(pitch) * dist,
@@ -1315,19 +1191,11 @@ function loop(now) {
 // 起動
 // ============================================================
 startBtn.addEventListener('click', startGame);
-nameInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); startGame(); }
-});
+nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); startGame(); } });
 initAuth();
 
-addEventListener('beforeunload', () => {
-  saveLocal();
-  if (PLAYER_ID) remove(ref(db, 'players/' + PLAYER_ID));
-});
-addEventListener('pagehide', () => {
-  saveLocal();
-  if (PLAYER_ID) remove(ref(db, 'players/' + PLAYER_ID));
-});
+addEventListener('beforeunload', () => { saveLocal(); if (PLAYER_ID) remove(ref(db, 'players/' + PLAYER_ID)); });
+addEventListener('pagehide', () => { saveLocal(); if (PLAYER_ID) remove(ref(db, 'players/' + PLAYER_ID)); });
 </script>
 </body>
 </html>
