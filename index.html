@@ -54,6 +54,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #loginOverlay p{margin:0 0 16px;font-size:13px;color:var(--ui-sub);line-height:1.6}
 #loginOverlay input{width:220px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#fff;font-size:15px;text-align:center;outline:none}
 #loginOverlay button{margin-top:14px;padding:12px 32px;border:0;border-radius:12px;background:#8fa2ff;color:#0d1020;font-weight:bold;font-size:15px;cursor:pointer}
+#loginOverlay button:disabled{opacity:.5;cursor:not-allowed}
 #loginOverlay .status{font-size:12px;color:var(--ui-sub);margin-top:10px;min-height:18px}
 @media (pointer:coarse){#stick,#jump{display:block}#hud .pc{display:none}}
 </style>
@@ -67,7 +68,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <p>名前を入力してはじめよう<br><small>（匿名でログインします）</small></p>
     <input id="nameInput" type="text" maxlength="16" placeholder="なまえ" value="">
     <br>
-    <button id="startBtn">はじめる</button>
+    <button id="startBtn" disabled>はじめる</button>
     <div class="status" id="loginStatus">接続中…</div>
   </div>
 </div>
@@ -131,9 +132,12 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 <div id="stick"><div id="knob"></div></div>
 <button id="jump">ジャンプ</button>
 
+<!-- ★ Three.js は必ずモジュールスクリプトより先に読み込む ★ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
-import { getDatabase, ref, set, update, remove, onValue, onDisconnect, push, query, limitToLast, onChildAdded, serverTimestamp } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js";
+import { getDatabase, ref, set, update, remove, onValue, onDisconnect, push, query, limitToLast, onChildAdded } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-database.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
 
 // ============================================================
@@ -157,11 +161,10 @@ const auth = getAuth(app);
 // ============================================================
 // グローバル状態
 // ============================================================
-let PLAYER_ID = null;          // auth.uid
+let PLAYER_ID = null;
 let playerName = 'ゲスト';
 let gameStarted = false;
 
-// カスタマイズ
 const custom = {
   hair: 'short',
   hairColor: '#2a1d16',
@@ -173,9 +176,7 @@ const custom = {
   mouth: 'smile'
 };
 
-// ============================================================
-// Three.js セットアップ（ログイン後に開始）
-// ============================================================
+// Three.js 関連（後で初期化）
 let renderer, scene, camera, sun, human, body, torso, torsoMesh, headGroup, headMesh,
     faceGroup, eyeL, eyeR, browMat, browL, browR, mouthMesh, hairGroup,
     matSkin, matShirt, matSock, matHair, matEye, matMouth,
@@ -187,9 +188,10 @@ let facing = 0;
 let sitting = false, emoteName = null, emoteTime = 0;
 let onGround = true, vy = 0, phase = 0;
 const vel = { x: 0, z: 0 };
+let hudHidden = false;
 
-// リモートプレイヤー管理
-const remotePlayers = {}; // uid -> { group, bodyG, arms, legs, head, name, data, bubbleEl, bubbleAge }
+// リモートプレイヤー
+const remotePlayers = {};
 
 // 妖精
 const fairies = [];
@@ -197,8 +199,8 @@ let acornCount = 0;
 
 // チャット
 let chatLog = [];
-const remoteBubbles = []; // { el, uid, life, age }
-let localBubble = null;   // { el, life, age }
+const remoteBubbles = [];
+let localBubble = null;
 
 // 入力
 const keys = {};
@@ -211,7 +213,7 @@ const SYNC_INTERVAL = 0.1;
 let lastTime = 0;
 let saveLocalTimer = 0;
 
-// DOM 参照
+// DOM
 const canvas = document.getElementById('c');
 const hudEl = document.getElementById('hud');
 const posEl = document.getElementById('pos');
@@ -229,14 +231,12 @@ const loginStatus = document.getElementById('loginStatus');
 const nameInput = document.getElementById('nameInput');
 const startBtn = document.getElementById('startBtn');
 
-// ローカル保存キー
 const SAVE_KEY = 'acorn_online_save_v1';
 
 // ============================================================
 // 匿名ログイン
 // ============================================================
 function initAuth() {
-  // 保存済み名前を復元
   try {
     const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
     if (saved.playerName) { playerName = saved.playerName; nameInput.value = playerName; }
@@ -269,7 +269,7 @@ function initAuth() {
 }
 
 // ============================================================
-// ゲーム開始（ログイン後に呼ばれる）
+// ゲーム開始
 // ============================================================
 async function startGame() {
   if (gameStarted || !PLAYER_ID) return;
@@ -285,8 +285,8 @@ async function startGame() {
   applyCustomization();
   refreshCustomUI();
   updateAcornUI();
+  applyHudVisibility();
 
-  // プレイヤー登録
   const myRef = ref(db, 'players/' + PLAYER_ID);
   await set(myRef, {
     name: playerName,
@@ -297,16 +297,11 @@ async function startGame() {
   });
   onDisconnect(myRef).remove();
 
-  // リモートプレイヤー監視
   setupRemotePlayersListener();
   setupChatListener();
-  setupOnlineCountListener();
-
-  // イベント登録
   setupInput();
   setupUI();
 
-  // ループ開始
   requestAnimationFrame(loop);
 }
 
@@ -314,6 +309,10 @@ async function startGame() {
 // Three.js 初期化
 // ============================================================
 function initThree() {
+  if (typeof THREE === 'undefined') {
+    alert('Three.js の読み込みに失敗しました。ページを再読み込みしてください。');
+    return;
+  }
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
@@ -351,10 +350,9 @@ function resize() {
 }
 
 // ============================================================
-// ワールド構築
+// ワールド
 // ============================================================
 function initWorld() {
-  // 地面
   const groundGeo = new THREE.PlaneGeometry(600, 600, 60, 60);
   groundGeo.rotateX(-Math.PI / 2);
   const gpos = groundGeo.attributes.position;
@@ -369,7 +367,6 @@ function initWorld() {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // 草
   (function addGrassField() {
     const g = new THREE.BufferGeometry();
     const N = 4000, arr = new Float32Array(N * 3);
@@ -392,10 +389,7 @@ function initWorld() {
   grid.material.transparent = true;
   scene.add(grid);
 
-  // 木・茂み・花・岩・丘
   buildTreesAndScenery();
-
-  // 妖精
   buildFairies();
 }
 
@@ -417,13 +411,7 @@ function makeTree(x, z, scale = 1) {
     new THREE.MeshStandardMaterial({ color: 0x4fa64a, roughness: 0.9 }),
     new THREE.MeshStandardMaterial({ color: 0x5fbf55, roughness: 0.9 }),
   ];
-  const blobs = [
-    [0, trunkH + 0.7 * scale, 0, 1.1 * scale],
-    [0.7 * scale, trunkH + 0.4 * scale, 0.4 * scale, 0.8 * scale],
-    [-0.6 * scale, trunkH + 0.5 * scale, -0.5 * scale, 0.85 * scale],
-    [0.2 * scale, trunkH + 1.2 * scale, -0.3 * scale, 0.7 * scale],
-  ];
-  blobs.forEach((b, i) => {
+  [[0,trunkH+0.7*scale,0,1.1*scale],[0.7*scale,trunkH+0.4*scale,0.4*scale,0.8*scale],[-0.6*scale,trunkH+0.5*scale,-0.5*scale,0.85*scale],[0.2*scale,trunkH+1.2*scale,-0.3*scale,0.7*scale]].forEach((b, i) => {
     const m = new THREE.Mesh(new THREE.SphereGeometry(b[3], 10, 8), mats[i % 3]);
     m.position.set(b[0], b[1], b[2]);
     m.castShadow = true;
@@ -436,19 +424,16 @@ function makeTree(x, z, scale = 1) {
 
 function makeOakTree(x, z, scale = 1) {
   const g = makeTree(x, z, scale);
-  const acornCapMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
-  const acornBodyMat = new THREE.MeshStandardMaterial({ color: 0xc68b3c, roughness: 0.8 });
+  const capMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xc68b3c, roughness: 0.8 });
   for (let i = 0; i < 5; i++) {
     const a = Math.random() * Math.PI * 2, r = (0.6 + Math.random() * 0.6) * scale;
     const acorn = new THREE.Group();
     acorn.position.set(Math.cos(a) * r, 2.8 * scale + Math.random() * 0.5, Math.sin(a) * r);
-    const b = new THREE.Mesh(new THREE.SphereGeometry(0.12 * scale, 8, 6), acornBodyMat);
-    b.scale.y = 1.3;
-    b.position.y = -0.08 * scale;
-    acorn.add(b);
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.13 * scale, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.5), acornCapMat);
-    cap.position.y = 0.03 * scale;
-    acorn.add(cap);
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.12 * scale, 8, 6), bodyMat);
+    b.scale.y = 1.3; b.position.y = -0.08 * scale; acorn.add(b);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.13 * scale, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.5), capMat);
+    cap.position.y = 0.03 * scale; acorn.add(cap);
     g.add(acorn);
   }
   return g;
@@ -461,9 +446,7 @@ function makeBush(x, z, scale = 1) {
   for (let i = 0; i < 4; i++) {
     const m = new THREE.Mesh(new THREE.SphereGeometry((0.35 + Math.random() * 0.25) * scale, 8, 6), mat);
     m.position.set((Math.random() - 0.5) * 0.8 * scale, 0.35 * scale, (Math.random() - 0.5) * 0.8 * scale);
-    m.castShadow = true;
-    m.receiveShadow = true;
-    g.add(m);
+    m.castShadow = true; m.receiveShadow = true; g.add(m);
   }
   scene.add(g);
 }
@@ -474,86 +457,51 @@ function makeFlowerPatch(x, z) {
   const colors = [0xff6b8a, 0xffd166, 0xffffff, 0xb388ff, 0xff9f68];
   for (let i = 0; i < 14; i++) {
     const a = Math.random() * Math.PI * 2, r = Math.random() * 1.6;
-    const stem = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 0.35, 4),
-      new THREE.MeshStandardMaterial({ color: 0x3f8f3a })
-    );
-    stem.position.set(Math.cos(a) * r, 0.17, Math.sin(a) * r);
-    g.add(stem);
-    const petal = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 6, 5),
-      new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.7 })
-    );
-    petal.position.set(Math.cos(a) * r, 0.38, Math.sin(a) * r);
-    g.add(petal);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 4), new THREE.MeshStandardMaterial({ color: 0x3f8f3a }));
+    stem.position.set(Math.cos(a) * r, 0.17, Math.sin(a) * r); g.add(stem);
+    const petal = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.7 }));
+    petal.position.set(Math.cos(a) * r, 0.38, Math.sin(a) * r); g.add(petal);
   }
   scene.add(g);
 }
 
 function makeRock(x, z, s = 1) {
-  const m = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(0.6 * s, 0),
-    new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 1 })
-  );
+  const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 * s, 0), new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 1 }));
   m.position.set(x, 0.3 * s, z);
   m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-  m.scale.y = 0.7;
-  m.castShadow = true;
-  m.receiveShadow = true;
+  m.scale.y = 0.7; m.castShadow = true; m.receiveShadow = true;
   scene.add(m);
 }
 
 function makeHill(x, z, r, h) {
-  const m = new THREE.Mesh(
-    new THREE.SphereGeometry(r, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshStandardMaterial({ color: 0x5f9f4f, roughness: 1 })
-  );
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x5f9f4f, roughness: 1 }));
   m.position.set(x, -r + h, z);
-  m.scale.y = h / r;
-  m.receiveShadow = true;
+  m.scale.y = h / r; m.receiveShadow = true;
   scene.add(m);
 }
 
 function buildTreesAndScenery() {
-  const FOREST_CENTER = new THREE.Vector3(-22, 0, 18);
+  const FC = new THREE.Vector3(-22, 0, 18);
   for (let i = 0; i < 24; i++) {
     const a = (i / 24) * Math.PI * 2, r = 10 + Math.sin(i * 1.7) * 2.5;
-    makeOakTree(FOREST_CENTER.x + Math.cos(a) * r, FOREST_CENTER.z + Math.sin(a) * r, 1.0 + Math.random() * 0.5);
+    makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 1.0 + Math.random() * 0.5);
   }
   for (let i = 0; i < 10; i++) {
     const a = Math.random() * Math.PI * 2, r = Math.random() * 7;
-    makeOakTree(FOREST_CENTER.x + Math.cos(a) * r, FOREST_CENTER.z + Math.sin(a) * r, 0.9 + Math.random() * 0.4);
+    makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 0.9 + Math.random() * 0.4);
   }
-  const treeSpots = [
-    [-16,-6,1.3],[-20,4,1.1],[-13,12,1.0],[-24,-14,1.5],[-10,-20,1.2],
-    [16,10,1.2],[22,-2,1.4],[18,-18,1.1],[26,12,1.3],[30,-12,1.5],
-    [-4,-22,1.1],[8,16,1.0],[-28,20,1.4],[36,4,1.6],[-32,-8,1.2],
-    [2,6,1.0],[-2,-6,1.1],[14,4,1.2],[-6,10,1.0]
-  ];
-  treeSpots.forEach(([x, z, s]) => makeTree(x, z, s));
-
-  [[-6,6,1],[10,4,1.2],[14,-4,1],[-14,-2,1.1],[4,-16,1],[20,2,1.3],[-18,14,1.1],[28,-4,1.2],[0,10,1],[6,10,1]]
-    .forEach(([x, z, s]) => makeBush(x, z, s));
-
-  [[-8,2],[-3,8],[9,8],[-12,-8],[12,-12],[-2,-10],[18,6],[-20,2],[6,14],[-16,-16],[0,-14],[2,2],[10,10],[-9,15]]
-    .forEach(([x, z]) => makeFlowerPatch(x, z));
-
-  [[-10,10,1],[15,-8,1.3],[24,4,0.9],[-18,-4,1.1],[8,-14,1],[-6,-16,0.8],[12,16,1.2],[-4,4,0.8]]
-    .forEach(([x, z, s]) => makeRock(x, z, s));
-
-  makeHill(-70,-60,35,18); makeHill(70,-80,45,22); makeHill(-80,60,40,16);
-  makeHill(90,50,50,20); makeHill(0,-120,60,26);
+  [[-16,-6,1.3],[-20,4,1.1],[-13,12,1.0],[-24,-14,1.5],[-10,-20,1.2],[16,10,1.2],[22,-2,1.4],[18,-18,1.1],[26,12,1.3],[30,-12,1.5],[-4,-22,1.1],[8,16,1.0],[-28,20,1.4],[36,4,1.6],[-32,-8,1.2],[2,6,1.0],[-2,-6,1.1],[14,4,1.2],[-6,10,1.0]].forEach(([x,z,s]) => makeTree(x, z, s));
+  [[-6,6,1],[10,4,1.2],[14,-4,1],[-14,-2,1.1],[4,-16,1],[20,2,1.3],[-18,14,1.1],[28,-4,1.2],[0,10,1],[6,10,1]].forEach(([x,z,s]) => makeBush(x, z, s));
+  [[-8,2],[-3,8],[9,8],[-12,-8],[12,-12],[-2,-10],[18,6],[-20,2],[6,14],[-16,-16],[0,-14],[2,2],[10,10],[-9,15]].forEach(([x,z]) => makeFlowerPatch(x, z));
+  [[-10,10,1],[15,-8,1.3],[24,4,0.9],[-18,-4,1.1],[8,-14,1],[-6,-16,0.8],[12,16,1.2],[-4,4,0.8]].forEach(([x,z,s]) => makeRock(x, z, s));
+  makeHill(-70,-60,35,18); makeHill(70,-80,45,22); makeHill(-80,60,40,16); makeHill(90,50,50,20); makeHill(0,-120,60,26);
 }
 
 function buildFairies() {
-  const FOREST_CENTER = new THREE.Vector3(-22, 0, 18);
+  const FC = new THREE.Vector3(-22, 0, 18);
   const positions = [
-    [FOREST_CENTER.x+3, FOREST_CENTER.z+2],
-    [FOREST_CENTER.x-4, FOREST_CENTER.z-3],
-    [FOREST_CENTER.x+5, FOREST_CENTER.z-4],
-    [FOREST_CENTER.x-5, FOREST_CENTER.z+5],
-    [FOREST_CENTER.x+1, FOREST_CENTER.z-6],
-    [8,6],[-8,-8],[14,-12],[-14,10],[0,-12],[18,12],
+    [FC.x+3,FC.z+2],[FC.x-4,FC.z-3],[FC.x+5,FC.z-4],[FC.x-5,FC.z+5],[FC.x+1,FC.z-6],
+    [8,6],[-8,-8],[14,-12],[-14,10],[0,-12],[18,12]
   ];
   positions.forEach(([x, z], i) => {
     const g = new THREE.Group();
@@ -561,44 +509,29 @@ function buildFairies() {
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd9a44a, roughness: 0.6, emissive: 0x553311, emissiveIntensity: 0.15 });
     const capMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
     const bodyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), bodyMat);
-    bodyMesh.scale.y = 1.3;
-    bodyMesh.position.y = 0.5;
-    bodyMesh.castShadow = true;
-    g.add(bodyMesh);
+    bodyMesh.scale.y = 1.3; bodyMesh.position.y = 0.5; bodyMesh.castShadow = true; g.add(bodyMesh);
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
-    cap.position.y = 0.7;
-    cap.castShadow = true;
-    g.add(cap);
+    cap.position.y = 0.7; cap.castShadow = true; g.add(cap);
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.12, 5), capMat);
-    stem.position.y = 0.9;
-    g.add(stem);
+    stem.position.y = 0.9; g.add(stem);
     const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
     for (const s of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat);
-      eye.position.set(s * 0.1, 0.52, 0.24);
-      g.add(eye);
+      eye.position.set(s * 0.1, 0.52, 0.24); g.add(eye);
     }
     const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff8f9f });
     for (const s of [-1, 1]) {
       const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), cheekMat);
-      cheek.position.set(s * 0.16, 0.44, 0.2);
-      g.add(cheek);
+      cheek.position.set(s * 0.16, 0.44, 0.2); g.add(cheek);
     }
     const wingMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.6, roughness: 0.3, emissive: 0x88bbff, emissiveIntensity: 0.4, side: THREE.DoubleSide });
     const wingGeo = new THREE.CircleGeometry(0.28, 10);
     for (const s of [-1, 1]) {
       const wing = new THREE.Mesh(wingGeo, wingMat);
-      wing.position.set(s * 0.26, 0.55, 0);
-      wing.rotation.y = s * Math.PI / 2.5;
-      wing.rotation.x = -0.3;
-      g.add(wing);
+      wing.position.set(s * 0.26, 0.55, 0); wing.rotation.y = s * Math.PI / 2.5; wing.rotation.x = -0.3; g.add(wing);
     }
-    const aura = new THREE.Mesh(
-      new THREE.SphereGeometry(0.55, 12, 10),
-      new THREE.MeshBasicMaterial({ color: 0xffe6a0, transparent: true, opacity: 0.12, depthWrite: false })
-    );
-    aura.position.y = 0.6;
-    g.add(aura);
+    const aura = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe6a0, transparent: true, opacity: 0.12, depthWrite: false }));
+    aura.position.y = 0.6; g.add(aura);
     scene.add(g);
     fairies.push({ group: g, id: i, collected: false, phase: Math.random() * Math.PI * 2, aura });
   });
@@ -606,7 +539,7 @@ function buildFairies() {
 }
 
 // ============================================================
-// ローカルプレイヤー構築
+// ローカルプレイヤー
 // ============================================================
 function meshBox(w, h, d, mat) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -617,10 +550,8 @@ function meshBox(w, h, d, mat) {
 function initLocalPlayer() {
   human = new THREE.Group();
   scene.add(human);
-  body = new THREE.Group();
-  human.add(body);
-  torso = new THREE.Group();
-  body.add(torso);
+  body = new THREE.Group(); human.add(body);
+  torso = new THREE.Group(); body.add(torso);
 
   matSkin = new THREE.MeshStandardMaterial({ color: 0xb97a4b, roughness: 0.8 });
   matShirt = new THREE.MeshStandardMaterial({ color: 0x1b2a5c, roughness: 0.7 });
@@ -643,41 +574,31 @@ function initLocalPlayer() {
   faceGroup = new THREE.Group();
   headGroup.add(faceGroup);
   eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), matEye);
-  eyeL.position.set(-0.07, 0.02, 0.18);
-  faceGroup.add(eyeL);
+  eyeL.position.set(-0.07, 0.02, 0.18); faceGroup.add(eyeL);
   eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.026, 8, 8), matEye);
-  eyeR.position.set(0.07, 0.02, 0.18);
-  faceGroup.add(eyeR);
+  eyeR.position.set(0.07, 0.02, 0.18); faceGroup.add(eyeR);
 
   browMat = new THREE.MeshBasicMaterial({ color: 0x2a1d16 });
   browL = meshBox(0.06, 0.012, 0.01, browMat);
-  browL.position.set(-0.07, 0.075, 0.185);
-  faceGroup.add(browL);
+  browL.position.set(-0.07, 0.075, 0.185); faceGroup.add(browL);
   browR = meshBox(0.06, 0.012, 0.01, browMat);
-  browR.position.set(0.07, 0.075, 0.185);
-  faceGroup.add(browR);
+  browR.position.set(0.07, 0.075, 0.185); faceGroup.add(browR);
 
   mouthMesh = meshBox(0.06, 0.02, 0.01, matMouth);
-  mouthMesh.position.set(0, -0.07, 0.19);
-  faceGroup.add(mouthMesh);
+  mouthMesh.position.set(0, -0.07, 0.19); faceGroup.add(mouthMesh);
 
   const cheekMatFace = new THREE.MeshBasicMaterial({ color: 0xff8f9f, transparent: true, opacity: 0.5 });
-  const cheekL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
-  cheekL.position.set(-0.11, -0.03, 0.16);
-  faceGroup.add(cheekL);
-  const cheekR = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
-  cheekR.position.set(0.11, -0.03, 0.16);
-  faceGroup.add(cheekR);
+  const cL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
+  cL.position.set(-0.11, -0.03, 0.16); faceGroup.add(cL);
+  const cR = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), cheekMatFace);
+  cR.position.set(0.11, -0.03, 0.16); faceGroup.add(cR);
 
   hairGroup = new THREE.Group();
   headGroup.add(hairGroup);
 
-  armL = createArm(-1);
-  armR = createArm(1);
-  legL = createLeg(-1);
-  legR = createLeg(1);
+  armL = createArm(-1); armR = createArm(1);
+  legL = createLeg(-1); legR = createLeg(1);
 
-  // 初期位置をローカル保存から復元
   try {
     const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
     if (saved.x !== undefined) human.position.x = saved.x;
@@ -693,17 +614,13 @@ function createArm(side) {
   shoulder.position.set(side * 0.36, 1.47, 0);
   body.add(shoulder);
   const upperArm = meshBox(0.14, 0.32, 0.14, matSkin);
-  upperArm.position.y = -0.16;
-  shoulder.add(upperArm);
+  upperArm.position.y = -0.16; shoulder.add(upperArm);
   const elbow = new THREE.Group();
-  elbow.position.y = -0.32;
-  shoulder.add(elbow);
+  elbow.position.y = -0.32; shoulder.add(elbow);
   const foreArm = meshBox(0.13, 0.3, 0.13, matSkin);
-  foreArm.position.y = -0.15;
-  elbow.add(foreArm);
+  foreArm.position.y = -0.15; elbow.add(foreArm);
   const sleeve = meshBox(0.17, 0.24, 0.17, matShirt);
-  sleeve.position.y = -0.11;
-  shoulder.add(sleeve);
+  sleeve.position.y = -0.11; shoulder.add(sleeve);
   return { shoulder, elbow };
 }
 
@@ -712,17 +629,13 @@ function createLeg(side) {
   hip.position.set(side * 0.14, 0.86, 0);
   body.add(hip);
   const thigh = meshBox(0.2, 0.42, 0.2, matSkin);
-  thigh.position.y = -0.21;
-  hip.add(thigh);
+  thigh.position.y = -0.21; hip.add(thigh);
   const knee = new THREE.Group();
-  knee.position.y = -0.42;
-  hip.add(knee);
+  knee.position.y = -0.42; hip.add(knee);
   const shin = meshBox(0.18, 0.44, 0.18, matSkin);
-  shin.position.y = -0.22;
-  knee.add(shin);
+  shin.position.y = -0.22; knee.add(shin);
   const sock = meshBox(0.235, 0.4, 0.235, matSock);
-  sock.position.y = -0.2;
-  hip.add(sock);
+  sock.position.y = -0.2; hip.add(sock);
   return { hip, knee };
 }
 
@@ -735,52 +648,33 @@ function buildHair(style) {
   const capMat = matHair;
   if (style === 'short') {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
-    cap.position.y = 0.02;
-    cap.rotation.x = -0.15;
-    hairGroup.add(cap);
+    cap.position.y = 0.02; cap.rotation.x = -0.15; hairGroup.add(cap);
     const bang = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.06, 0.06), capMat);
-    bang.position.set(0, 0.13, 0.15);
-    bang.rotation.x = -0.3;
-    hairGroup.add(bang);
+    bang.position.set(0, 0.13, 0.15); bang.rotation.x = -0.3; hairGroup.add(bang);
   } else if (style === 'long') {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.6), capMat);
-    cap.position.y = 0.02;
-    cap.rotation.x = -0.12;
-    hairGroup.add(cap);
+    cap.position.y = 0.02; cap.rotation.x = -0.12; hairGroup.add(cap);
     const back = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.5, 0.12), capMat);
-    back.position.set(0, -0.15, -0.13);
-    back.castShadow = true;
-    hairGroup.add(back);
+    back.position.set(0, -0.15, -0.13); back.castShadow = true; hairGroup.add(back);
     for (const s of [-1, 1]) {
       const side = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.32, 0.14), capMat);
-      side.position.set(s * 0.19, -0.05, -0.02);
-      hairGroup.add(side);
+      side.position.set(s * 0.19, -0.05, -0.02); hairGroup.add(side);
     }
   } else if (style === 'twin') {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.205, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
-    cap.position.y = 0.02;
-    cap.rotation.x = -0.15;
-    hairGroup.add(cap);
+    cap.position.y = 0.02; cap.rotation.x = -0.15; hairGroup.add(cap);
     for (const s of [-1, 1]) {
       const tailBase = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), capMat);
-      tailBase.position.set(s * 0.19, 0.0, -0.05);
-      hairGroup.add(tailBase);
+      tailBase.position.set(s * 0.19, 0.0, -0.05); hairGroup.add(tailBase);
       const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.03, 0.4, 8), capMat);
-      tail.position.set(s * 0.25, -0.2, -0.08);
-      tail.rotation.z = s * 0.3;
-      tail.castShadow = true;
-      hairGroup.add(tail);
+      tail.position.set(s * 0.25, -0.2, -0.08); tail.rotation.z = s * 0.3; tail.castShadow = true; hairGroup.add(tail);
     }
   } else if (style === 'bob') {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.215, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), capMat);
-    cap.position.y = 0.02;
-    cap.rotation.x = -0.1;
-    hairGroup.add(cap);
+    cap.position.y = 0.02; cap.rotation.x = -0.1; hairGroup.add(cap);
     for (const s of [-1, 1]) {
       const side = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.22, 0.16), capMat);
-      side.position.set(s * 0.2, -0.05, -0.02);
-      side.castShadow = true;
-      hairGroup.add(side);
+      side.position.set(s * 0.2, -0.05, -0.02); side.castShadow = true; hairGroup.add(side);
     }
   }
 }
@@ -826,53 +720,39 @@ function refreshCustomUI() {
 // ============================================================
 function createRemotePlayer(uid, data) {
   const g = new THREE.Group();
-  const bodyG = new THREE.Group();
-  g.add(bodyG);
+  const bodyG = new THREE.Group(); g.add(bodyG);
 
   const skinMat = new THREE.MeshStandardMaterial({ color: data.skinColor || 0xb97a4b, roughness: 0.8 });
   const shirtMat = new THREE.MeshStandardMaterial({ color: data.shirtColor || 0x1b2a5c, roughness: 0.7 });
   const hairMat = new THREE.MeshStandardMaterial({ color: data.hairColor || 0x2a1d16, roughness: 0.8 });
 
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.66, 0.3), shirtMat);
-  torso.position.y = 1.18;
-  torso.castShadow = true;
-  bodyG.add(torso);
+  torso.position.y = 1.18; torso.castShadow = true; bodyG.add(torso);
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16), skinMat);
-  head.position.y = 1.74;
-  head.castShadow = true;
-  bodyG.add(head);
+  head.position.y = 1.74; head.castShadow = true; bodyG.add(head);
 
   if (data.hair && data.hair !== 'bald') {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), hairMat);
-    cap.position.y = 1.76;
-    cap.rotation.x = -0.15;
-    bodyG.add(cap);
+    cap.position.y = 1.76; cap.rotation.x = -0.15; bodyG.add(cap);
   }
 
   const eyeMat = new THREE.MeshBasicMaterial({ color: data.eyeColor || 0x111111 });
   for (const s of [-1, 1]) {
     const eye = new THREE.Mesh(new THREE.SphereGeometry(0.026, 6, 6), eyeMat);
-    eye.position.set(s * 0.07, 1.76, 0.18);
-    bodyG.add(eye);
+    eye.position.set(s * 0.07, 1.76, 0.18); bodyG.add(eye);
   }
 
   const arms = [];
   for (const side of [-1, 1]) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.6, 0.14), skinMat);
-    arm.position.set(side * 0.36, 1.1, 0);
-    arm.castShadow = true;
-    bodyG.add(arm);
-    arms.push(arm);
+    arm.position.set(side * 0.36, 1.1, 0); arm.castShadow = true; bodyG.add(arm); arms.push(arm);
   }
 
   const legs = [];
   for (const side of [-1, 1]) {
     const leg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.8, 0.2), skinMat);
-    leg.position.set(side * 0.14, 0.4, 0);
-    leg.castShadow = true;
-    bodyG.add(leg);
-    legs.push(leg);
+    leg.position.set(side * 0.14, 0.4, 0); leg.castShadow = true; bodyG.add(leg); legs.push(leg);
   }
 
   g.userData = { uid, bodyG, arms, legs, head, skinMat, shirtMat, hairMat, eyeMat };
@@ -890,12 +770,10 @@ function removeRemotePlayer(uid) {
 }
 
 function setupRemotePlayersListener() {
-  const playersRef = ref(db, 'players');
-  onValue(playersRef, (snapshot) => {
+  onValue(ref(db, 'players'), (snapshot) => {
     const data = snapshot.val() || {};
     const now = Date.now();
 
-    // オンライン数（自分含む、30秒以内）
     let count = 0;
     for (const uid in data) {
       if (data[uid] && (now - (data[uid].lastSeen || 0)) < 30000) count++;
@@ -909,31 +787,21 @@ function setupRemotePlayersListener() {
       if (now - (p.lastSeen || 0) > 30000) { removeRemotePlayer(uid); continue; }
 
       let rp = remotePlayers[uid];
-      if (!rp) {
-        rp = createRemotePlayer(uid, p);
-        remotePlayers[uid] = rp;
-      }
+      if (!rp) { rp = createRemotePlayer(uid, p); remotePlayers[uid] = rp; }
 
-      // 色更新
       const ud = rp.userData;
       ud.skinMat.color.set(p.skinColor || '#b97a4b');
       ud.shirtMat.color.set(p.shirtColor || '#1b2a5c');
       ud.hairMat.color.set(p.hairColor || '#2a1d16');
       ud.eyeMat.color.set(p.eyeColor || '#111111');
 
-      // 位置
       rp.position.set(p.x || 0, p.y || 0, p.z || 0);
       rp.rotation.y = p.facing || 0;
 
-      // ポーズ
       const bG = ud.bodyG, arms = ud.arms, legs = ud.legs;
-      bG.position.y = 0;
-      bG.rotation.x = 0;
-      bG.rotation.y = 0;
-      arms[0].rotation.set(0, 0, 0);
-      arms[1].rotation.set(0, 0, 0);
-      legs[0].rotation.set(0, 0, 0);
-      legs[1].rotation.set(0, 0, 0);
+      bG.position.y = 0; bG.rotation.x = 0; bG.rotation.y = 0;
+      arms[0].rotation.set(0, 0, 0); arms[1].rotation.set(0, 0, 0);
+      legs[0].rotation.set(0, 0, 0); legs[1].rotation.set(0, 0, 0);
 
       if (p.pose === 'sit') {
         bG.position.y = -0.55;
@@ -954,21 +822,15 @@ function setupRemotePlayersListener() {
   });
 }
 
-function setupOnlineCountListener() {
-  // onValue で既に更新しているので何もしない（プレースホルダー）
-}
-
 // ============================================================
 // チャット
 // ============================================================
 function setupChatListener() {
-  const chatQuery = query(ref(db, 'chat'), limitToLast(50));
-  onChildAdded(chatQuery, (snapshot) => {
+  const q = query(ref(db, 'chat'), limitToLast(50));
+  onChildAdded(q, (snapshot) => {
     const msg = snapshot.val();
     if (!msg || !msg.uid) return;
     if (msg.uid === PLAYER_ID) return;
-
-    // リモートプレイヤーの吹き出し
     showRemoteBubble(msg.uid, msg.name || 'ゲスト', msg.text, 5000);
     addChatLog(msg.name || 'ゲスト', msg.text);
   });
@@ -1005,7 +867,6 @@ function escapeHtml(s) {
 function updateBubbles(dt) {
   const v = new THREE.Vector3();
 
-  // ローカル
   if (localBubble) {
     localBubble.age += dt;
     v.set(human.position.x, human.position.y + 2.25, human.position.z);
@@ -1019,7 +880,6 @@ function updateBubbles(dt) {
     if (localBubble.age >= localBubble.life) { localBubble.el.remove(); localBubble = null; }
   }
 
-  // リモート
   for (let i = remoteBubbles.length - 1; i >= 0; i--) {
     const b = remoteBubbles[i];
     b.age += dt;
@@ -1076,9 +936,7 @@ function setupInput() {
   }
   stick.addEventListener('pointerdown', (e) => { stickId = e.pointerId; stick.setPointerCapture(e.pointerId); stickMove(e); });
   stick.addEventListener('pointermove', (e) => { if (e.pointerId === stickId) stickMove(e); });
-  const stickEnd = (e) => {
-    if (e.pointerId === stickId) { stickId = null; joy.x = joy.y = 0; knob.style.transform = ''; }
-  };
+  const stickEnd = (e) => { if (e.pointerId === stickId) { stickId = null; joy.x = joy.y = 0; knob.style.transform = ''; } };
   stick.addEventListener('pointerup', stickEnd);
   stick.addEventListener('pointercancel', stickEnd);
 
@@ -1111,7 +969,6 @@ function setupInput() {
 // UI
 // ============================================================
 function setupUI() {
-  // HUD 表示切り替え
   document.getElementById('uiToggle').addEventListener('click', () => {
     hudHidden = !hudHidden;
     applyHudVisibility();
@@ -1119,7 +976,6 @@ function setupUI() {
   });
   applyHudVisibility();
 
-  // カスタマイズパネル
   document.getElementById('customBtn').addEventListener('click', () => customPanel.classList.toggle('open'));
   document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => document.getElementById(btn.dataset.close).classList.remove('open'));
@@ -1129,40 +985,32 @@ function setupUI() {
     const b = e.target.closest('button[data-hair]');
     if (!b) return;
     custom.hair = b.dataset.hair;
-    refreshCustomUI();
-    applyCustomization();
-    saveLocal();
+    refreshCustomUI(); applyCustomization(); saveLocal();
     if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { hair: custom.hair }).catch(() => {});
   });
   document.getElementById('eyeShapeOpts').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-eye]');
     if (!b) return;
     custom.eyeShape = b.dataset.eye;
-    refreshCustomUI();
-    applyCustomization();
-    saveLocal();
+    refreshCustomUI(); applyCustomization(); saveLocal();
   });
   document.getElementById('mouthOpts').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-mouth]');
     if (!b) return;
     custom.mouth = b.dataset.mouth;
-    refreshCustomUI();
-    applyCustomization();
-    saveLocal();
+    refreshCustomUI(); applyCustomization(); saveLocal();
   });
 
   ['hairColor', 'skinColor', 'shirtColor', 'sockColor', 'eyeColor'].forEach(id => {
     document.getElementById(id).addEventListener('input', (e) => {
       custom[id] = e.target.value;
-      applyCustomization();
-      saveLocal();
+      applyCustomization(); saveLocal();
       if (PLAYER_ID && ['skinColor', 'shirtColor', 'hairColor', 'eyeColor'].includes(id)) {
         update(ref(db, 'players/' + PLAYER_ID), { [id]: custom[id] }).catch(() => {});
       }
     });
   });
 
-  // 名前変更
   document.getElementById('nameCustom').addEventListener('change', (e) => {
     const v = (e.target.value || '').trim().slice(0, 16);
     if (v) {
@@ -1172,11 +1020,8 @@ function setupUI() {
     }
   });
 
-  // 座る
   document.getElementById('sitBtn').addEventListener('click', toggleSit);
-  // エモート
   document.getElementById('emoteBtn').addEventListener('click', toggleEmotePanel);
-  // チャット
   document.getElementById('chatBtn').addEventListener('click', () => {
     if (chatBar.classList.contains('open')) closeChat();
     else openChat();
@@ -1249,22 +1094,17 @@ function showToast(msg) {
   toastTimer = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
 }
 
-function updateAcornUI() {
-  acornsEl.textContent = acornCount;
-}
+function updateAcornUI() { acornsEl.textContent = acornCount; }
 
 // ============================================================
 // ローカル保存
 // ============================================================
-let hudHidden = false;
-
 function saveLocal() {
   if (!human) return;
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       x: human.position.x, y: human.position.y, z: human.position.z,
-      facing, yaw, pitch, dist,
-      custom, playerName, hudHidden
+      facing, yaw, pitch, dist, custom, playerName, hudHidden
     }));
   } catch(e) {}
 }
@@ -1293,7 +1133,7 @@ function resetPose() {
 // Firebase 同期
 // ============================================================
 function syncMyState(dt, force = false) {
-  if (!PLAYER_ID) return;
+  if (!PLAYER_ID || !human) return;
   lastSync += dt;
   if (!force && lastSync < SYNC_INTERVAL) return;
   lastSync = 0;
@@ -1305,12 +1145,8 @@ function syncMyState(dt, force = false) {
   else if (Math.hypot(vel.x, vel.z) > 0.1) pose = 'walk';
 
   update(ref(db, 'players/' + PLAYER_ID), {
-    x: human.position.x,
-    y: human.position.y,
-    z: human.position.z,
-    facing: facing,
-    pose: pose,
-    lastSeen: Date.now()
+    x: human.position.x, y: human.position.y, z: human.position.z,
+    facing: facing, pose: pose, lastSeen: Date.now()
   }).catch(() => {});
 }
 
@@ -1319,7 +1155,7 @@ function syncMyState(dt, force = false) {
 // ============================================================
 function loop(now) {
   requestAnimationFrame(loop);
-  if (!renderer || !gameStarted) return;
+  if (!renderer || !gameStarted || !human) return;
 
   const dt = Math.min(0.05, (now - lastTime) / 1000 || 0.016);
   lastTime = now;
@@ -1355,9 +1191,7 @@ function loop(now) {
     vel.z *= Math.max(0, 1 - dt * 10);
   }
 
-  if ((keys.Space || jumpBtn) && onGround && !sitting && !emoteName && !chatting) {
-    vy = 7; onGround = false;
-  }
+  if ((keys.Space || jumpBtn) && onGround && !sitting && !emoteName && !chatting) { vy = 7; onGround = false; }
   vy -= 20 * dt;
   human.position.y += vy * dt;
   if (human.position.y <= 0) { human.position.y = 0; vy = 0; onGround = true; }
@@ -1435,7 +1269,6 @@ function loop(now) {
     body.rotation.x = Math.min(0.2, sp * 0.025);
   }
 
-  // 妖精
   fairies.forEach(f => {
     if (f.collected) return;
     const bob = Math.sin(now / 500 + f.phase) * 0.12;
@@ -1457,7 +1290,6 @@ function loop(now) {
     }
   });
 
-  // カメラ
   const tx = human.position.x, ty = human.position.y + 1.2, tz = human.position.z;
   camera.position.set(
     tx + Math.sin(yaw) * Math.cos(pitch) * dist,
@@ -1470,13 +1302,9 @@ function loop(now) {
   sun.target.position.set(tx, 0, tz);
   posEl.innerHTML = `<br><small>X ${tx.toFixed(1)}　Z ${tz.toFixed(1)}</small>`;
 
-  // 吹き出し
   updateBubbles(dt);
-
-  // Firebase 同期
   syncMyState(dt);
 
-  // ローカル保存（1秒ごと）
   saveLocalTimer += dt;
   if (saveLocalTimer > 1) { saveLocalTimer = 0; saveLocal(); }
 
@@ -1492,7 +1320,6 @@ nameInput.addEventListener('keydown', (e) => {
 });
 initAuth();
 
-// 離脱時
 addEventListener('beforeunload', () => {
   saveLocal();
   if (PLAYER_ID) remove(ref(db, 'players/' + PLAYER_ID));
