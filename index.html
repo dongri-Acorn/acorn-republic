@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>どんぐりの森 オンライン</title>
+<title>どんぐりの森 オンライン（更地）</title>
 <style>
 :root{--ui-bg:rgba(20,24,38,.65);--ui-fg:#eef1ff;--ui-sub:#aab3d6;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 html,body{height:100%;margin:0;overflow:hidden;background:#0d1020;color:var(--ui-fg);font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif}
@@ -11,7 +11,6 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 #hud{position:fixed;left:12px;top:calc(env(safe-area-inset-top,0px) + 12px);background:var(--ui-bg);backdrop-filter:blur(6px);padding:10px 14px;border-radius:12px;font-size:13px;line-height:1.7;pointer-events:none;transition:opacity .25s, transform .25s;z-index:10}
 #hud.hidden{opacity:0;transform:translateY(-10px);pointer-events:none}
 #hud b{color:#fff}#hud small{color:var(--ui-sub)}
-#acorns{color:#ffcf5c;font-weight:bold}
 #onlineCount{color:#7dffa8;font-weight:bold}
 #topRight{position:fixed;right:12px;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;gap:8px;z-index:20}
 #topRight button{background:var(--ui-bg);color:var(--ui-fg);border:0;border-radius:10px;padding:8px 12px;font-size:12px;backdrop-filter:blur(6px);cursor:pointer}
@@ -62,7 +61,7 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 
 <div id="loginOverlay">
   <div class="card">
-    <h2>🌰 どんぐりの森 オンライン</h2>
+    <h2>🌰 サンドボックス オンライン</h2>
     <p>名前を入力してはじめよう<br><small>（匿名でログインします）</small></p>
     <input id="nameInput" type="text" maxlength="16" placeholder="なまえ" value="">
     <br>
@@ -71,10 +70,9 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
   </div>
 </div>
 
-<div id="hud"><b>どんぐりの森 オンライン</b><br>
+<div id="hud"><b>サンドボックス オンライン</b><br>
 <span class="pc"><small>WASD/矢印：移動　Shift：走る　Space：ジャンプ<br>ドラッグ：視点　C：あぐら　E：エモート　T：チャット</small></span>
 <span id="pos"></span><br>
-🌰 <span id="acorns">0</span>/<span id="acornTotal">0</span>　
 🟢 オンライン：<span id="onlineCount">1</span>人
 </div>
 <div id="topRight">
@@ -173,8 +171,6 @@ const vel = { x: 0, z: 0 };
 let hudHidden = false;
 
 const remotePlayers = {};
-const fairies = [];
-let acornCount = 0;
 
 let chatLog = [];
 const remoteBubbles = [];
@@ -189,16 +185,9 @@ const SYNC_INTERVAL = 0.05;
 let lastTime = 0;
 let saveLocalTimer = 0;
 
-// ★ コリジョン関連
-const colliders = []; // {minX,maxX,minY,maxY,minZ,maxZ}
-const stairs = [];    // {x,z,w,d,baseY,stepH,steps,axis}
-let houseOrigin = new THREE.Vector3(10, 0, 6);
-
 const canvas = document.getElementById('c');
 const hudEl = document.getElementById('hud');
 const posEl = document.getElementById('pos');
-const acornsEl = document.getElementById('acorns');
-const acornTotalEl = document.getElementById('acornTotal');
 const onlineCountEl = document.getElementById('onlineCount');
 const toastEl = document.getElementById('toast');
 const chatBar = document.getElementById('chatInputBar');
@@ -211,7 +200,7 @@ const loginStatus = document.getElementById('loginStatus');
 const nameInput = document.getElementById('nameInput');
 const startBtn = document.getElementById('startBtn');
 
-const SAVE_KEY = 'acorn_online_save_v4';
+const SAVE_KEY = 'sandbox_online_save_v6';
 
 // ============================================================
 // 認証
@@ -407,7 +396,6 @@ async function startGame() {
   initMyPlayer();
   applyMyCustomization();
   refreshCustomUI();
-  updateAcornUI();
   applyHudVisibility();
 
   const myRef = ref(db, 'players/' + PLAYER_ID);
@@ -446,7 +434,7 @@ function initThree() {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xbfe3ff);
-  scene.fog = new THREE.Fog(0xbfe3ff, 60, 220);
+  scene.fog = new THREE.Fog(0xbfe3ff, 80, 260);
   camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
 
   scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x6b8f4e, 1.05));
@@ -471,607 +459,22 @@ function resize() {
 }
 
 // ============================================================
-// ワールド
+// ワールド（地面とグリッドのみ）
 // ============================================================
 function initWorld() {
-  const groundGeo = new THREE.PlaneGeometry(600, 600, 60, 60);
+  // 地面（起伏なし・フラット）
+  const groundGeo = new THREE.PlaneGeometry(600, 600);
   groundGeo.rotateX(-Math.PI / 2);
-  const gpos = groundGeo.attributes.position;
-  for (let i = 0; i < gpos.count; i++) {
-    const x = gpos.getX(i), z = gpos.getZ(i);
-    const d = Math.hypot(x, z);
-    const h = (Math.sin(x * 0.05) * Math.cos(z * 0.05) * 1.6 + Math.sin(x * 0.15 + z * 0.1) * 0.4) * Math.min(1, Math.max(0, (d - 15) / 40));
-    gpos.setY(i, h);
-  }
-  groundGeo.computeVertexNormals();
   const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ color: 0x6fae4a, roughness: 1 }));
-  ground.receiveShadow = true; scene.add(ground);
+  ground.receiveShadow = true;
+  scene.add(ground);
 
-  (function addGrassField() {
-    const g = new THREE.BufferGeometry();
-    const N = 4000, arr = new Float32Array(N * 3);
-    for (let i = 0; i < N; i++) {
-      const a = Math.random() * Math.PI * 2, r = 18 + Math.random() * 140;
-      arr[i * 3] = Math.cos(a) * r; arr[i * 3 + 1] = 0.05; arr[i * 3 + 2] = Math.sin(a) * r;
-    }
-    g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
-    const m = new THREE.PointsMaterial({ color: 0x4f8f35, size: 0.5, sizeAttenuation: true, transparent: true, opacity: 0.8 });
-    const p = new THREE.Points(g, m); p.position.y = 0.02; scene.add(p);
-  })();
-
+  // グリッド
   const grid = new THREE.GridHelper(600, 300, 0x8fbf6a, 0x7aa85a);
-  grid.position.y = 0.02; grid.material.opacity = 0.25; grid.material.transparent = true; scene.add(grid);
-
-  buildTreesAndScenery();
-  buildFairies();
-  buildHouse();
-}
-
-function makeTree(x, z, scale = 1) {
-  const g = new THREE.Group(); g.position.set(x, 0, z);
-  const trunkH = 2.2 * scale;
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16 * scale, 0.24 * scale, trunkH, 7), new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 1 }));
-  trunk.position.y = trunkH / 2; trunk.castShadow = true; trunk.receiveShadow = true; g.add(trunk);
-  const mats = [
-    new THREE.MeshStandardMaterial({ color: 0x3f8f3a, roughness: 0.9 }),
-    new THREE.MeshStandardMaterial({ color: 0x4fa64a, roughness: 0.9 }),
-    new THREE.MeshStandardMaterial({ color: 0x5fbf55, roughness: 0.9 }),
-  ];
-  [[0,trunkH+0.7*scale,0,1.1*scale],[0.7*scale,trunkH+0.4*scale,0.4*scale,0.8*scale],[-0.6*scale,trunkH+0.5*scale,-0.5*scale,0.85*scale],[0.2*scale,trunkH+1.2*scale,-0.3*scale,0.7*scale]].forEach((b, i) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(b[3], 10, 8), mats[i % 3]);
-    m.position.set(b[0], b[1], b[2]); m.castShadow = true; m.receiveShadow = true; g.add(m);
-  });
-  scene.add(g); return g;
-}
-
-function makeOakTree(x, z, scale = 1) {
-  const g = makeTree(x, z, scale);
-  const capMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xc68b3c, roughness: 0.8 });
-  for (let i = 0; i < 5; i++) {
-    const a = Math.random() * Math.PI * 2, r = (0.6 + Math.random() * 0.6) * scale;
-    const acorn = new THREE.Group();
-    acorn.position.set(Math.cos(a) * r, 2.8 * scale + Math.random() * 0.5, Math.sin(a) * r);
-    const b = new THREE.Mesh(new THREE.SphereGeometry(0.12 * scale, 8, 6), bodyMat);
-    b.scale.y = 1.3; b.position.y = -0.08 * scale; acorn.add(b);
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.13 * scale, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.5), capMat);
-    cap.position.y = 0.03 * scale; acorn.add(cap);
-    g.add(acorn);
-  }
-  return g;
-}
-
-function makeBush(x, z, scale = 1) {
-  const g = new THREE.Group(); g.position.set(x, 0, z);
-  const mat = new THREE.MeshStandardMaterial({ color: 0x4f9f45, roughness: 1 });
-  for (let i = 0; i < 4; i++) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry((0.35 + Math.random() * 0.25) * scale, 8, 6), mat);
-    m.position.set((Math.random() - 0.5) * 0.8 * scale, 0.35 * scale, (Math.random() - 0.5) * 0.8 * scale);
-    m.castShadow = true; m.receiveShadow = true; g.add(m);
-  }
-  scene.add(g);
-}
-
-function makeFlowerPatch(x, z) {
-  const g = new THREE.Group(); g.position.set(x, 0, z);
-  const colors = [0xff6b8a, 0xffd166, 0xffffff, 0xb388ff, 0xff9f68];
-  for (let i = 0; i < 14; i++) {
-    const a = Math.random() * Math.PI * 2, r = Math.random() * 1.6;
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 4), new THREE.MeshStandardMaterial({ color: 0x3f8f3a }));
-    stem.position.set(Math.cos(a) * r, 0.17, Math.sin(a) * r); g.add(stem);
-    const petal = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.7 }));
-    petal.position.set(Math.cos(a) * r, 0.38, Math.sin(a) * r); g.add(petal);
-  }
-  scene.add(g);
-}
-
-function makeRock(x, z, s = 1) {
-  const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.6 * s, 0), new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 1 }));
-  m.position.set(x, 0.3 * s, z); m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-  m.scale.y = 0.7; m.castShadow = true; m.receiveShadow = true; scene.add(m);
-}
-
-function makeHill(x, z, r, h) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x5f9f4f, roughness: 1 }));
-  m.position.set(x, -r + h, z); m.scale.y = h / r; m.receiveShadow = true; scene.add(m);
-}
-
-function buildTreesAndScenery() {
-  const FC = new THREE.Vector3(-22, 0, 18);
-  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2, r = 10 + Math.sin(i * 1.7) * 2.5; makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 1.0 + Math.random() * 0.5); }
-  for (let i = 0; i < 10; i++) { const a = Math.random() * Math.PI * 2, r = Math.random() * 7; makeOakTree(FC.x + Math.cos(a) * r, FC.z + Math.sin(a) * r, 0.9 + Math.random() * 0.4); }
-  [[-16,-6,1.3],[-20,4,1.1],[-13,12,1.0],[-24,-14,1.5],[-10,-20,1.2],[16,10,1.2],[22,-2,1.4],[18,-18,1.1],[26,12,1.3],[30,-12,1.5],[-4,-22,1.1],[8,16,1.0],[-28,20,1.4],[36,4,1.6],[-32,-8,1.2],[2,6,1.0],[-2,-6,1.1],[14,4,1.2],[-6,10,1.0]].forEach(([x,z,s]) => makeTree(x, z, s));
-  [[-6,6,1],[10,4,1.2],[14,-4,1],[-14,-2,1.1],[4,-16,1],[20,2,1.3],[-18,14,1.1],[28,-4,1.2],[0,10,1],[6,10,1]].forEach(([x,z,s]) => makeBush(x, z, s));
-  [[-8,2],[-3,8],[9,8],[-12,-8],[12,-12],[-2,-10],[18,6],[-20,2],[6,14],[-16,-16],[0,-14],[2,2],[10,10],[-9,15]].forEach(([x,z]) => makeFlowerPatch(x, z));
-  [[-10,10,1],[15,-8,1.3],[24,4,0.9],[-18,-4,1.1],[8,-14,1],[-6,-16,0.8],[12,16,1.2],[-4,4,0.8]].forEach(([x,z,s]) => makeRock(x, z, s));
-  makeHill(-70,-60,35,18); makeHill(70,-80,45,22); makeHill(-80,60,40,16); makeHill(90,50,50,20); makeHill(0,-120,60,26);
-}
-
-function buildFairies() {
-  const FC = new THREE.Vector3(-22, 0, 18);
-  const positions = [[FC.x+3,FC.z+2],[FC.x-4,FC.z-3],[FC.x+5,FC.z-4],[FC.x-5,FC.z+5],[FC.x+1,FC.z-6],[8,6],[-8,-8],[14,-12],[-14,10],[0,-12],[18,12]];
-  positions.forEach(([x, z], i) => {
-    const g = new THREE.Group(); g.position.set(x, 0, z);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd9a44a, roughness: 0.6, emissive: 0x553311, emissiveIntensity: 0.15 });
-    const capMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
-    const bodyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), bodyMat);
-    bodyMesh.scale.y = 1.3; bodyMesh.position.y = 0.5; bodyMesh.castShadow = true; g.add(bodyMesh);
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), capMat);
-    cap.position.y = 0.7; cap.castShadow = true; g.add(cap);
-    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.12, 5), capMat);
-    stem.position.y = 0.9; g.add(stem);
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
-    for (const s of [-1, 1]) { const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), eyeMat); eye.position.set(s * 0.1, 0.52, 0.24); g.add(eye); }
-    const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff8f9f });
-    for (const s of [-1, 1]) { const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), cheekMat); cheek.position.set(s * 0.16, 0.44, 0.2); g.add(cheek); }
-    const wingMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.6, roughness: 0.3, emissive: 0x88bbff, emissiveIntensity: 0.4, side: THREE.DoubleSide });
-    const wingGeo = new THREE.CircleGeometry(0.28, 10);
-    for (const s of [-1, 1]) { const wing = new THREE.Mesh(wingGeo, wingMat); wing.position.set(s * 0.26, 0.55, 0); wing.rotation.y = s * Math.PI / 2.5; wing.rotation.x = -0.3; g.add(wing); }
-    const aura = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe6a0, transparent: true, opacity: 0.12, depthWrite: false }));
-    aura.position.y = 0.6; g.add(aura);
-    scene.add(g);
-    fairies.push({ group: g, id: i, collected: false, phase: Math.random() * Math.PI * 2, aura });
-  });
-  acornTotalEl.textContent = fairies.length;
-}
-
-// ============================================================
-// コリジョン登録ヘルパー
-// ============================================================
-function addCollider(cx, cy, cz, w, h, d) {
-  colliders.push({
-    minX: cx - w/2, maxX: cx + w/2,
-    minY: cy - h/2, maxY: cy + h/2,
-    minZ: cz - d/2, maxZ: cz + d/2
-  });
-}
-// 家ローカル座標→ワールド座標
-function houseLocalToWorld(lx, lz) {
-  const ang = -0.35;
-  const wx = houseOrigin.x + lx * Math.cos(ang) + lz * Math.sin(ang);
-  const wz = houseOrigin.z - lx * Math.sin(ang) + lz * Math.cos(ang);
-  return [wx, wz];
-}
-// 家ローカルのコライダー登録
-function addHouseCollider(lx, ly, lz, w, h, d) {
-  const ang = -0.35;
-  // 回転を考慮した AABB（簡易：回転後の外接矩形）
-  // ここでは壁が軸に沿うよう家を回転させているので、回転後のAABBで近似
-  const [wx, wz] = houseLocalToWorld(lx, lz);
-  // 回転を無視してAABBを取ると不正確になるため、壁を軸並行に配置する
-  // 家全体は回転させず、装飾のみ回転させる方針に変更
-  colliders.push({
-    minX: wx - w/2, maxX: wx + w/2,
-    minY: houseOrigin.y + ly - h/2, maxY: houseOrigin.y + ly + h/2,
-    minZ: wz - d/2, maxZ: wz + d/2
-  });
-}
-
-// ============================================================
-// 家（高レベル版・内外装＋当たり判定）
-// ============================================================
-function buildHouse() {
-  houseOrigin.set(14, 0, 6);
-  const HX = houseOrigin.x, HZ = houseOrigin.z;
-  const house = new THREE.Group();
-  house.position.set(HX, 0, HZ);
-  scene.add(house);
-
-  // マテリアル
-  const matStone = new THREE.MeshStandardMaterial({ color: 0x8a8a82, roughness: 1 });
-  const matStoneDark = new THREE.MeshStandardMaterial({ color: 0x6a6a62, roughness: 1 });
-  const matWall = new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.9 });
-  const matTimber = new THREE.MeshStandardMaterial({ color: 0x5a3a20, roughness: 0.9 });
-  const matRoof = new THREE.MeshStandardMaterial({ color: 0x8a3b2e, roughness: 0.85 });
-  const matRoofDark = new THREE.MeshStandardMaterial({ color: 0x6a2b1e, roughness: 0.9 });
-  const matFloor = new THREE.MeshStandardMaterial({ color: 0x9c6b3f, roughness: 0.85 });
-  const matFloorDark = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
-  const matWindow = new THREE.MeshStandardMaterial({ color: 0xbfe3ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.55 });
-  const matDoor = new THREE.MeshStandardMaterial({ color: 0x4a2e18, roughness: 0.85 });
-  const matBrick = new THREE.MeshStandardMaterial({ color: 0xa0503a, roughness: 0.95 });
-  const matFabric = new THREE.MeshStandardMaterial({ color: 0xc84a5a, roughness: 1 });
-  const matWoodLight = new THREE.MeshStandardMaterial({ color: 0xb98a5a, roughness: 0.9 });
-  const matLamp = new THREE.MeshStandardMaterial({ color: 0xffe8a0, emissive: 0xffcc55, emissiveIntensity: 1.2 });
-
-  // 家の寸法
-  const W = 10, D = 8;          // 外壁
-  const wallH = 3.2;            // 1階の高さ
-  const wallT = 0.3;            // 壁の厚み
-  const floor2Y = 3.2;          // 2階の床
-  const wall2H = 2.6;           // 2階の高さ
-  const roofBaseY = floor2Y + wall2H;
-
-  function box(w, h, d, x, y, z, mat, parent = house) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-    m.position.set(x, y, z);
-    m.castShadow = true; m.receiveShadow = true;
-    parent.add(m);
-    return m;
-  }
-
-  // ===== 石の土台 =====
-  box(W + 0.4, 0.4, D + 0.4, 0, 0.2, 0, matStone);
-  // 土台の石目
-  for (let i = 0; i < 8; i++) {
-    box(W + 0.42, 0.08, D + 0.42, 0, 0.1 + i * 0.05, 0, matStoneDark);
-  }
-
-  // ===== 1階の外壁（4面、ドアと窓の開口部を空ける） =====
-  // 南面（正面 +Z側）: ドア中央、両側に窓
-  // 壁を分割して開口部を作る
-  // 南面左
-  box((W - 2.4)/2 - 0.4, wallH, wallT, -(W/4 + 0.6), wallH/2 + 0.4, D/2, matWall);
-  // 南面右
-  box((W - 2.4)/2 - 0.4, wallH, wallT, (W/4 + 0.6), wallH/2 + 0.4, D/2, matWall);
-  // ドア上部（鴨居）
-  box(2.4, wallH - 2.2, wallT, 0, 2.2 + (wallH - 2.2)/2 + 0.4, D/2, matWall);
-  // 窓上部・下部は壁で埋める（窓は透過オブジェクトとして別途）
-  // 北面（背面 -Z側）
-  box(W, wallH, wallT, 0, wallH/2 + 0.4, -D/2, matWall);
-  // 東面（+X側）
-  box(wallT, wallH, D, W/2, wallH/2 + 0.4, 0, matWall);
-  // 西面（-X側）
-  box(wallT, wallH, D, -W/2, wallH/2 + 0.4, 0, matWall);
-
-  // 外壁のコライダー（開口部を考慮）
-  // 南面左
-  addHouseCollider(-(W/4 + 0.6), wallH/2 + 0.4, D/2, (W - 2.4)/2 - 0.4, wallH, wallT);
-  // 南面右
-  addHouseCollider((W/4 + 0.6), wallH/2 + 0.4, D/2, (W - 2.4)/2 - 0.4, wallH, wallT);
-  // 南面ドア上部（通り抜け不可にしないため、ドア部分はコライダーなし）
-  // 北面
-  addHouseCollider(0, wallH/2 + 0.4, -D/2, W, wallH, wallT);
-  // 東面
-  addHouseCollider(W/2, wallH/2 + 0.4, 0, wallT, wallH, D);
-  // 西面
-  addHouseCollider(-W/2, wallH/2 + 0.4, 0, wallT, wallH, D);
-
-  // ===== 木骨（ハーフティンバー）装飾 =====
-  const timberPositions = [
-    // 南面
-    [-W/2+0.15, wallH/2+0.4, D/2+0.16, 0.15, wallH, 0.05],
-    [W/2-0.15, wallH/2+0.4, D/2+0.16, 0.15, wallH, 0.05],
-    [-W/4-0.6, wallH/2+0.4, D/2+0.16, 0.12, wallH, 0.05],
-    [W/4+0.6, wallH/2+0.4, D/2+0.16, 0.12, wallH, 0.05],
-    // 北面
-    [-W/2+0.15, wallH/2+0.4, -D/2-0.16, 0.15, wallH, 0.05],
-    [W/2-0.15, wallH/2+0.4, -D/2-0.16, 0.15, wallH, 0.05],
-    // 東面
-    [W/2+0.16, wallH/2+0.4, -D/2+0.15, 0.05, wallH, 0.15],
-    [W/2+0.16, wallH/2+0.4, D/2-0.15, 0.05, wallH, 0.15],
-    // 西面
-    [-W/2-0.16, wallH/2+0.4, -D/2+0.15, 0.05, wallH, 0.15],
-    [-W/2-0.16, wallH/2+0.4, D/2-0.15, 0.05, wallH, 0.15],
-  ];
-  timberPositions.forEach(([x,y,z,w,h,d]) => box(w, h, d, x, y, z, matTimber));
-  // 横の梁
-  box(W, 0.2, 0.1, 0, wallH + 0.3, D/2 + 0.16, matTimber);
-  box(W, 0.2, 0.1, 0, wallH + 0.3, -D/2 - 0.16, matTimber);
-  box(0.1, 0.2, D, W/2 + 0.16, wallH + 0.3, 0, matTimber);
-  box(0.1, 0.2, D, -W/2 - 0.16, wallH + 0.3, 0, matTimber);
-
-  // ===== ドア =====
-  const door = box(1.6, 2.2, 0.12, 0, 1.5, D/2 + 0.04, matDoor);
-  // ドアの枠
-  box(1.9, 0.15, 0.15, 0, 2.7, D/2 + 0.05, matTimber);
-  box(0.15, 2.4, 0.15, -0.95, 1.5, D/2 + 0.05, matTimber);
-  box(0.15, 2.4, 0.15, 0.95, 1.5, D/2 + 0.05, matTimber);
-  // ドアノブ
-  const dk = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.2 }));
-  dk.position.set(0.55, 1.4, D/2 + 0.12);
-  house.add(dk);
-
-  // ===== 窓（1階・2階） =====
-  function windowAt(x, y, z, w, h, rotY = 0) {
-    const g = new THREE.Group();
-    g.position.set(x, y, z);
-    g.rotation.y = rotY;
-    // ガラス
-    const glass = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.06), matWindow);
-    g.add(glass);
-    // 枠
-    const frameMat = matTimber;
-    const fw = 0.08;
-    const top = new THREE.Mesh(new THREE.BoxGeometry(w + fw*2, fw, 0.12), frameMat); top.position.y = h/2 + fw/2; g.add(top);
-    const bot = new THREE.Mesh(new THREE.BoxGeometry(w + fw*2, fw, 0.12), frameMat); bot.position.y = -h/2 - fw/2; g.add(bot);
-    const left = new THREE.Mesh(new THREE.BoxGeometry(fw, h, 0.12), frameMat); left.position.x = -w/2 - fw/2; g.add(left);
-    const right = new THREE.Mesh(new THREE.BoxGeometry(fw, h, 0.12), frameMat); right.position.x = w/2 + fw/2; g.add(right);
-    // 十字桟
-    const vbar = new THREE.Mesh(new THREE.BoxGeometry(fw*0.7, h, 0.08), frameMat); g.add(vbar);
-    const hbar = new THREE.Mesh(new THREE.BoxGeometry(w, fw*0.7, 0.08), frameMat); g.add(hbar);
-    house.add(g);
-  }
-  // 南面 1階の窓（ドア両側）
-  windowAt(-2.8, 1.8, D/2 + 0.1, 1.2, 1.2);
-  windowAt(2.8, 1.8, D/2 + 0.1, 1.2, 1.2);
-  // 東面 1階
-  windowAt(W/2 + 0.1, 1.8, 0, 1.4, 1.2, Math.PI/2);
-  // 西面 1階
-  windowAt(-W/2 - 0.1, 1.8, 0, 1.4, 1.2, Math.PI/2);
-  // 南面 2階（2つ）
-  windowAt(-2.5, floor2Y + 1.3, D/2 + 0.1, 1.2, 1.2);
-  windowAt(2.5, floor2Y + 1.3, D/2 + 0.1, 1.2, 1.2);
-  // 北面 2階
-  windowAt(0, floor2Y + 1.3, -D/2 - 0.1, 1.4, 1.2);
-
-  // ===== 2階の外壁 =====
-  // 南面
-  box(W, wall2H, wallT, 0, floor2Y + wall2H/2, D/2, matWall);
-  // 北面
-  box(W, wall2H, wallT, 0, floor2Y + wall2H/2, -D/2, matWall);
-  // 東面
-  box(wallT, wall2H, D, W/2, floor2Y + wall2H/2, 0, matWall);
-  // 西面
-  box(wallT, wall2H, D, -W/2, floor2Y + wall2H/2, 0, matWall);
-
-  addHouseCollider(0, floor2Y + wall2H/2, D/2, W, wall2H, wallT);
-  addHouseCollider(0, floor2Y + wall2H/2, -D/2, W, wall2H, wallT);
-  addHouseCollider(W/2, floor2Y + wall2H/2, 0, wallT, wall2H, D);
-  addHouseCollider(-W/2, floor2Y + wall2H/2, 0, wallT, wall2H, D);
-
-  // 2階の木骨
-  [-W/2+0.15, W/2-0.15].forEach(x => {
-    box(0.15, wall2H, 0.05, x, floor2Y + wall2H/2, D/2 + 0.16, matTimber);
-    box(0.15, wall2H, 0.05, x, floor2Y + wall2H/2, -D/2 - 0.16, matTimber);
-  });
-  [-D/2+0.15, D/2-0.15].forEach(z => {
-    box(0.05, wall2H, 0.15, W/2 + 0.16, floor2Y + wall2H/2, z, matTimber);
-    box(0.05, wall2H, 0.15, -W/2 - 0.16, floor2Y + wall2H/2, z, matTimber);
-  });
-  // 2階の梁
-  box(W, 0.2, 0.1, 0, floor2Y + wall2H + 0.1, D/2 + 0.16, matTimber);
-  box(W, 0.2, 0.1, 0, floor2Y + wall2H + 0.1, -D/2 - 0.16, matTimber);
-
-  // ===== 屋根 =====
-  // 切妻屋根（2つの傾斜面）
-  function roofSlope(sign) {
-    // sign = 1: +Z側、-1: -Z側
-    const slopeW = W + 1.2;
-    const slopeD = D/2 + 0.8;
-    const slopeH = 0.15;
-    const angle = Math.atan2(2.2, D/2 + 0.8);
-    const slopeLen = Math.hypot(2.2, D/2 + 0.8);
-    const g = new THREE.Group();
-    const m = new THREE.Mesh(new THREE.BoxGeometry(slopeW, slopeH, slopeLen), matRoof);
-    m.castShadow = true; m.receiveShadow = true;
-    g.add(m);
-    // 瓦のライン
-    for (let i = 0; i < 6; i++) {
-      const tile = new THREE.Mesh(new THREE.BoxGeometry(slopeW, 0.06, 0.1), matRoofDark);
-      tile.position.z = -slopeLen/2 + (i + 0.5) * (slopeLen / 6);
-      tile.position.y = 0.08;
-      g.add(tile);
-    }
-    g.position.set(0, roofBaseY + 1.1, sign * (D/4 + 0.4));
-    g.rotation.x = sign * angle;
-    house.add(g);
-  }
-  roofSlope(1);
-  roofSlope(-1);
-  // 棟
-  box(W + 1.4, 0.25, 0.3, 0, roofBaseY + 2.3, 0, matRoofDark);
-
-  // ===== 煙突 =====
-  const chimneyX = W/2 - 1.5, chimneyZ = -D/2 + 1.5;
-  box(0.9, 3.0, 0.9, chimneyX, roofBaseY + 2.0, chimneyZ, matBrick);
-  box(1.1, 0.2, 1.1, chimneyX, roofBaseY + 3.55, chimneyZ, matStoneDark);
-  // 煙
-  for (let i = 0; i < 5; i++) {
-    const smoke = new THREE.Mesh(
-      new THREE.SphereGeometry(0.35 + i * 0.08, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22 - i * 0.035 })
-    );
-    smoke.position.set(chimneyX + Math.sin(i*1.3)*0.3, roofBaseY + 3.9 + i * 0.7, chimneyZ);
-    house.add(smoke);
-  }
-
-  // ===== ポーチ =====
-  // ポーチの床
-  box(4.5, 0.2, 1.8, 0, 0.5, D/2 + 0.9, matFloorDark);
-  // ポーチの柱
-  box(0.2, 2.6, 0.2, -2.1, 1.8, D/2 + 1.7, matTimber);
-  box(0.2, 2.6, 0.2, 2.1, 1.8, D/2 + 1.7, matTimber);
-  // ポーチの屋根
-  box(4.8, 0.15, 2.0, 0, 3.1, D/2 + 0.9, matRoof);
-  // 段差
-  box(4.0, 0.15, 0.4, 0, 0.35, D/2 + 1.9, matStone);
-  box(3.6, 0.15, 0.4, 0, 0.2, D/2 + 2.25, matStone);
-
-  // ポーチのコライダー
-  addHouseCollider(0, 0.5, D/2 + 0.9, 4.5, 0.4, 1.8);
-
-  // ===== 1階の床 =====
-  box(W - 0.4, 0.1, D - 0.4, 0, 0.45, 0, matFloor);
-  // 床の板目
-  for (let i = 0; i < 8; i++) {
-    box(W - 0.5, 0.02, 0.06, 0, 0.51, -D/2 + 0.5 + i * (D-1)/8, matFloorDark);
-  }
-
-  // ===== 2階の床 =====
-  box(W - 0.4, 0.2, D - 0.4, 0, floor2Y, 0, matFloor);
-  for (let i = 0; i < 8; i++) {
-    box(W - 0.5, 0.02, 0.06, 0, floor2Y + 0.11, -D/2 + 0.5 + i * (D-1)/8, matFloorDark);
-  }
-  // 2階床のコライダー（上に乗れるように）
-  addHouseCollider(0, floor2Y, 0, W - 0.4, 0.2, D - 0.4);
-
-  // ===== 内部の間仕切り壁（2階） =====
-  // 2階の寝室と廊下を分ける壁
-  box(wallT, wall2H, D*0.4, -W/4, floor2Y + wall2H/2, -D/4, matWall);
-  addHouseCollider(-W/4, floor2Y + wall2H/2, -D/4, wallT, wall2H, D*0.4);
-
-  // ===== 階段（1階→2階） =====
-  // 東側の壁沿いに配置
-  const stairX = W/2 - 1.4;
-  const stairZ = -D/2 + 2.0;
-  const stairW = 1.4;
-  const stairD = 3.0;
-  const steps = 10;
-  const stepH = (floor2Y - 0.5) / steps; // 2階床まで
-  const stepD = stairD / steps;
-  for (let i = 0; i < steps; i++) {
-    const y = 0.5 + i * stepH;
-    const z = stairZ + i * stepD;
-    box(stairW, stepH, stepD, stairX, y - stepH/2, z, matFloorDark);
-  }
-  // 階段の手すり
-  for (let i = 0; i < steps; i += 2) {
-    const y = 0.5 + i * stepH;
-    const z = stairZ + i * stepD;
-    box(0.08, 0.8, 0.08, stairX - stairW/2 + 0.1, y + 0.4, z, matTimber);
-  }
-  box(0.08, 0.1, stairD, stairX - stairW/2 + 0.1, 0.5 + steps*stepH + 0.3, stairZ + stairD/2, matTimber);
-
-  // 階段のコライダー（各段）
-  for (let i = 0; i < steps; i++) {
-    const y = 0.5 + i * stepH;
-    const z = stairZ + i * stepD;
-    addHouseCollider(stairX, y - stepH/2, z, stairW, stepH, stepD);
-  }
-
-  // ===== 家具：暖炉 =====
-  const fireX = -W/2 + 1.0, fireZ = -D/2 + 1.0;
-  box(1.8, 2.2, 1.0, fireX, 1.6, fireZ, matStone);
-  box(1.4, 0.9, 0.5, fireX, 0.9, fireZ + 0.3, new THREE.MeshBasicMaterial({ color: 0x1a1a1a }));
-  // 火
-  const fire = new THREE.Mesh(
-    new THREE.ConeGeometry(0.35, 0.7, 8),
-    new THREE.MeshBasicMaterial({ color: 0xff6622 })
-  );
-  fire.position.set(fireX, 0.75, fireZ + 0.45);
-  house.add(fire);
-  addHouseCollider(fireX, 1.6, fireZ, 1.8, 2.2, 1.0);
-
-  // ===== 家具：ソファ =====
-  const sofaX = 2.5, sofaZ = 0;
-  box(2.4, 0.5, 1.0, sofaX, 0.85, sofaZ, matFabric);
-  box(2.4, 0.7, 0.3, sofaX, 1.25, sofaZ - 0.35, matFabric);
-  box(0.3, 0.7, 1.0, sofaX - 1.05, 1.05, sofaZ, matFabric);
-  box(0.3, 0.7, 1.0, sofaX + 1.05, 1.05, sofaZ, matFabric);
-  addHouseCollider(sofaX, 0.85, sofaZ, 2.4, 0.8, 1.0);
-
-  // ===== 家具：テーブル =====
-  const tableX = 2.5, tableZ = 1.8;
-  box(1.6, 0.1, 1.0, tableX, 1.1, tableZ, matWoodLight);
-  [[-0.65,-0.4],[0.65,-0.4],[-0.65,0.4],[0.65,0.4]].forEach(([dx,dz]) => {
-    box(0.1, 0.6, 0.1, tableX + dx, 0.75, tableZ + dz, matTimber);
-  });
-  addHouseCollider(tableX, 1.1, tableZ, 1.6, 0.2, 1.0);
-
-  // ===== 家具：キッチンカウンター =====
-  const kx = 0, kz = -D/2 + 1.0;
-  box(3.0, 0.9, 0.7, kx, 0.95, kz, matWoodLight);
-  box(3.0, 0.08, 0.8, kx, 1.42, kz, matStoneDark);
-  addHouseCollider(kx, 0.95, kz, 3.0, 0.9, 0.7);
-
-  // ===== 家具：本棚（2階） =====
-  const shelfX = -W/2 + 0.6, shelfZ = 0;
-  box(0.5, 2.0, 2.5, shelfX, floor2Y + 1.1, shelfZ, matTimber);
-  for (let i = 0; i < 4; i++) {
-    box(0.45, 0.05, 2.3, shelfX, floor2Y + 0.3 + i * 0.5, shelfZ, matFloorDark);
-    // 本
-    for (let j = 0; j < 6; j++) {
-      const bc = [0xc84a5a, 0x4a7ac8, 0x4ac87a, 0xc8c84a, 0x8a4ac8][j % 5];
-      box(0.3, 0.35, 0.15, shelfX, floor2Y + 0.5 + i * 0.5, shelfZ - 1.0 + j * 0.35, new THREE.MeshStandardMaterial({ color: bc, roughness: 0.8 }));
-    }
-  }
-  addHouseCollider(shelfX, floor2Y + 1.1, shelfZ, 0.5, 2.0, 2.5);
-
-  // ===== 家具：ベッド（2階） =====
-  const bedX = W/4 + 1, bedZ = D/4 - 1;
-  box(2.0, 0.4, 2.8, bedX, floor2Y + 0.4, bedZ, matTimber);
-  box(1.9, 0.2, 2.7, bedX, floor2Y + 0.7, bedZ, new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 1 }));
-  // 枕
-  box(1.2, 0.2, 0.5, bedX, floor2Y + 0.85, bedZ - 1.0, new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 1 }));
-  // 毛布
-  box(1.9, 0.1, 1.5, bedX, floor2Y + 0.85, bedZ + 0.5, new THREE.MeshStandardMaterial({ color: 0x4a7ac8, roughness: 1 }));
-  addHouseCollider(bedX, floor2Y + 0.5, bedZ, 2.0, 0.8, 2.8);
-
-  // ===== 家具：ランプ（暖炉の上） =====
-  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), matLamp);
-  lamp.position.set(fireX, 2.7, fireZ);
-  house.add(lamp);
-  const lampLight = new THREE.PointLight(0xffcc55, 0.8, 6, 2);
-  lampLight.position.set(fireX, 2.7, fireZ);
-  house.add(lampLight);
-
-  // ===== 外灯（ポーチ） =====
-  const porchLamp = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 10), matLamp);
-  porchLamp.position.set(0, 3.2, D/2 + 1.6);
-  house.add(porchLamp);
-  const porchLight = new THREE.PointLight(0xffcc55, 0.6, 8, 2);
-  porchLight.position.set(0, 3.2, D/2 + 1.6);
-  house.add(porchLight);
-
-  // ===== 周囲の花壇 =====
-  for (const [ox, oz] of [[-W/2-1, D/2+0.5], [W/2+1, D/2+0.5], [-W/2-1, -D/2-0.5], [W/2+1, -D/2-0.5]]) {
-    makeFlowerPatch(HX + ox, HZ + oz);
-  }
-
-  // ===== 看板 =====
-  const signPost = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.4, 6), matTimber);
-  signPost.position.set(HX + W/2 + 1.5, 0.7, HZ + D/2 + 1.5);
-  signPost.castShadow = true;
-  scene.add(signPost);
-  const signBoard = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 0.08), matWoodLight);
-  signBoard.position.set(HX + W/2 + 1.5, 1.4, HZ + D/2 + 1.5);
-  signBoard.castShadow = true;
-  scene.add(signBoard);
-
-  // 家全体のコライダーを更新（内部も含む）
-  // ※ 壁は個別に登録済み
-}
-
-// ============================================================
-// コリジョン判定
-// ============================================================
-const PLAYER_RADIUS = 0.35;
-const PLAYER_HEIGHT = 1.8;
-
-function collidesAt(x, y, z) {
-  const pr = PLAYER_RADIUS;
-  const pyMin = y + 0.1; // 足元少し上から
-  const pyMax = y + PLAYER_HEIGHT;
-  for (const c of colliders) {
-    if (x + pr > c.minX && x - pr < c.maxX &&
-        pyMax > c.minY && pyMin < c.maxY &&
-        z + pr > c.minZ && z - pr < c.maxZ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// プレイヤーが立つ床の高さを返す（家の2階、階段に対応）
-function getFloorHeight(x, z) {
-  // 家の中かどうか
-  const dx = x - houseOrigin.x, dz = z - houseOrigin.z;
-  const W = 10, D = 8;
-  const inHouse = Math.abs(dx) < W/2 - 0.2 && Math.abs(dz) < D/2 - 0.2;
-
-  let floorY = 0;
-
-  // 階段の上なら階段の高さ
-  const stairX = W/2 - 1.4, stairZ = -D/2 + 2.0, stairW = 1.4, stairD = 3.0, steps = 10;
-  const stepD = stairD / steps;
-  const localX = dx, localZ = dz;
-  if (Math.abs(localX - stairX) < stairW/2 && localZ > stairZ - stepD/2 && localZ < stairZ + stairD + stepD/2) {
-    const idx = Math.floor((localZ - (stairZ - stepD/2)) / stepD);
-    if (idx >= 0 && idx < steps) {
-      const stepH = (3.2 - 0.5) / steps;
-      floorY = Math.max(floorY, 0.5 + (idx + 1) * stepH);
-    }
-  }
-
-  // 2階の床
-  if (inHouse && Math.abs(localZ) < D/2 - 0.4 && Math.abs(localX) < W/2 - 0.4) {
-    // 階段の上端付近以外は2階の床
-    if (localX < stairX - stairW/2 || localZ < stairZ - stepD/2) {
-      floorY = Math.max(floorY, 3.2);
-    }
-  }
-
-  return floorY;
+  grid.position.y = 0.02;
+  grid.material.opacity = 0.35;
+  grid.material.transparent = true;
+  scene.add(grid);
 }
 
 // ============================================================
@@ -1425,7 +828,6 @@ function showToast(msg) {
   toastEl.textContent = msg; toastEl.style.opacity = '1';
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { toastEl.style.opacity = '0'; }, 1500);
 }
-function updateAcornUI() { acornsEl.textContent = acornCount; }
 
 function saveLocal() {
   if (!myModel) return;
@@ -1438,7 +840,7 @@ function saveLocal() {
 }
 
 // ============================================================
-// ローカルポーズ計算（コリジョン対応）
+// ローカルポーズ計算
 // ============================================================
 function computeLocalPose(now, dt) {
   const chatting = document.activeElement === chatInput;
@@ -1456,25 +858,13 @@ function computeLocalPose(now, dt) {
   const canMove = !sitting && !emoteName && !chatting;
 
   const g = myModel.group;
-  // 水平移動（X/Z軸分離でスライド）
   if (canMove && mag > 0) {
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     const rx = Math.cos(yaw), rz = -Math.sin(yaw);
     let dx = fx * iz + rx * ix, dz = fz * iz + rz * ix;
     const l = Math.hypot(dx, dz); dx /= l; dz /= l;
-
-    const stepX = dx * speed * dt;
-    const stepZ = dz * speed * dt;
-    const floorY = getFloorHeight(g.position.x, g.position.z);
-    // X方向
-    if (!collidesAt(g.position.x + stepX, floorY, g.position.z)) {
-      g.position.x += stepX;
-    }
-    // Z方向
-    if (!collidesAt(g.position.x, floorY, g.position.z + stepZ)) {
-      g.position.z += stepZ;
-    }
-    // 速度更新（表示用）
+    g.position.x += dx * speed * dt;
+    g.position.z += dz * speed * dt;
     vel.x = dx * speed;
     vel.z = dz * speed;
     const target = Math.atan2(dx, dz);
@@ -1485,20 +875,12 @@ function computeLocalPose(now, dt) {
     vel.z *= Math.max(0, 1 - dt * 10);
   }
 
-  // ジャンプ
-  const floorY = getFloorHeight(g.position.x, g.position.z);
+  // ジャンプ（地面は常に0）
   if ((keys.Space || jumpBtn) && onGround && !sitting && !emoteName && !chatting) { vy = 7; onGround = false; }
   vy -= 20 * dt;
   g.position.y += vy * dt;
-
-  // 着地判定（床の高さに応じて）
-  if (g.position.y <= floorY) {
-    g.position.y = floorY;
-    vy = 0;
-    onGround = true;
-  } else {
-    onGround = false;
-  }
+  if (g.position.y <= 0) { g.position.y = 0; vy = 0; onGround = true; }
+  else { onGround = false; }
 
   g.rotation.y = facing;
 
@@ -1621,25 +1003,6 @@ function loop(now) {
   lastTime = now;
 
   computeLocalPose(now, dt);
-
-  fairies.forEach(f => {
-    if (f.collected) return;
-    const bob = Math.sin(now / 500 + f.phase) * 0.12;
-    f.group.position.y = 0.6 + bob;
-    f.group.rotation.y += dt * 0.8;
-    if (f.aura) {
-      const s = 1 + Math.sin(now / 333 + f.phase) * 0.15;
-      f.aura.scale.set(s, s, s);
-      f.aura.material.opacity = 0.1 + Math.sin(now / 333 + f.phase) * 0.05;
-    }
-    const dx = myModel.group.position.x - f.group.position.x;
-    const dz = myModel.group.position.z - f.group.position.z;
-    if (Math.hypot(dx, dz) < 1.3 && Math.abs(myModel.group.position.y - 0.5) < 1.5) {
-      f.collected = true; f.group.visible = false;
-      acornCount++; updateAcornUI(); showToast('🌰 どんぐりをゲット！');
-    }
-  });
-
   updateRemotePlayers(dt);
 
   const tx = myModel.group.position.x, ty = myModel.group.position.y + 1.2, tz = myModel.group.position.z;
