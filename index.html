@@ -189,6 +189,11 @@ const SYNC_INTERVAL = 0.05;
 let lastTime = 0;
 let saveLocalTimer = 0;
 
+// ★ コリジョン関連
+const colliders = []; // {minX,maxX,minY,maxY,minZ,maxZ}
+const stairs = [];    // {x,z,w,d,baseY,stepH,steps,axis}
+let houseOrigin = new THREE.Vector3(10, 0, 6);
+
 const canvas = document.getElementById('c');
 const hudEl = document.getElementById('hud');
 const posEl = document.getElementById('pos');
@@ -206,7 +211,7 @@ const loginStatus = document.getElementById('loginStatus');
 const nameInput = document.getElementById('nameInput');
 const startBtn = document.getElementById('startBtn');
 
-const SAVE_KEY = 'acorn_online_save_v3';
+const SAVE_KEY = 'acorn_online_save_v4';
 
 // ============================================================
 // 認証
@@ -611,20 +616,70 @@ function buildFairies() {
 }
 
 // ============================================================
-// 家（ログハウス風）
+// コリジョン登録ヘルパー
+// ============================================================
+function addCollider(cx, cy, cz, w, h, d) {
+  colliders.push({
+    minX: cx - w/2, maxX: cx + w/2,
+    minY: cy - h/2, maxY: cy + h/2,
+    minZ: cz - d/2, maxZ: cz + d/2
+  });
+}
+// 家ローカル座標→ワールド座標
+function houseLocalToWorld(lx, lz) {
+  const ang = -0.35;
+  const wx = houseOrigin.x + lx * Math.cos(ang) + lz * Math.sin(ang);
+  const wz = houseOrigin.z - lx * Math.sin(ang) + lz * Math.cos(ang);
+  return [wx, wz];
+}
+// 家ローカルのコライダー登録
+function addHouseCollider(lx, ly, lz, w, h, d) {
+  const ang = -0.35;
+  // 回転を考慮した AABB（簡易：回転後の外接矩形）
+  // ここでは壁が軸に沿うよう家を回転させているので、回転後のAABBで近似
+  const [wx, wz] = houseLocalToWorld(lx, lz);
+  // 回転を無視してAABBを取ると不正確になるため、壁を軸並行に配置する
+  // 家全体は回転させず、装飾のみ回転させる方針に変更
+  colliders.push({
+    minX: wx - w/2, maxX: wx + w/2,
+    minY: houseOrigin.y + ly - h/2, maxY: houseOrigin.y + ly + h/2,
+    minZ: wz - d/2, maxZ: wz + d/2
+  });
+}
+
+// ============================================================
+// 家（高レベル版・内外装＋当たり判定）
 // ============================================================
 function buildHouse() {
+  houseOrigin.set(14, 0, 6);
+  const HX = houseOrigin.x, HZ = houseOrigin.z;
   const house = new THREE.Group();
-  house.position.set(10, 0, 6); // 森の手前、プレイヤー初期位置から見える場所
-  house.rotation.y = -0.35;
+  house.position.set(HX, 0, HZ);
   scene.add(house);
 
-  const woodMat = new THREE.MeshStandardMaterial({ color: 0x9c6b3f, roughness: 0.9 });
-  const woodDarkMat = new THREE.MeshStandardMaterial({ color: 0x6e4a29, roughness: 1.0 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x8a3b2e, roughness: 0.85 });
-  const windowMat = new THREE.MeshStandardMaterial({ color: 0xbfe3ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.75 });
-  const doorMat = new THREE.MeshStandardMaterial({ color: 0x5a3a20, roughness: 0.9 });
-  const stoneMat = new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 1 });
+  // マテリアル
+  const matStone = new THREE.MeshStandardMaterial({ color: 0x8a8a82, roughness: 1 });
+  const matStoneDark = new THREE.MeshStandardMaterial({ color: 0x6a6a62, roughness: 1 });
+  const matWall = new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.9 });
+  const matTimber = new THREE.MeshStandardMaterial({ color: 0x5a3a20, roughness: 0.9 });
+  const matRoof = new THREE.MeshStandardMaterial({ color: 0x8a3b2e, roughness: 0.85 });
+  const matRoofDark = new THREE.MeshStandardMaterial({ color: 0x6a2b1e, roughness: 0.9 });
+  const matFloor = new THREE.MeshStandardMaterial({ color: 0x9c6b3f, roughness: 0.85 });
+  const matFloorDark = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.9 });
+  const matWindow = new THREE.MeshStandardMaterial({ color: 0xbfe3ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.55 });
+  const matDoor = new THREE.MeshStandardMaterial({ color: 0x4a2e18, roughness: 0.85 });
+  const matBrick = new THREE.MeshStandardMaterial({ color: 0xa0503a, roughness: 0.95 });
+  const matFabric = new THREE.MeshStandardMaterial({ color: 0xc84a5a, roughness: 1 });
+  const matWoodLight = new THREE.MeshStandardMaterial({ color: 0xb98a5a, roughness: 0.9 });
+  const matLamp = new THREE.MeshStandardMaterial({ color: 0xffe8a0, emissive: 0xffcc55, emissiveIntensity: 1.2 });
+
+  // 家の寸法
+  const W = 10, D = 8;          // 外壁
+  const wallH = 3.2;            // 1階の高さ
+  const wallT = 0.3;            // 壁の厚み
+  const floor2Y = 3.2;          // 2階の床
+  const wall2H = 2.6;           // 2階の高さ
+  const roofBaseY = floor2Y + wall2H;
 
   function box(w, h, d, x, y, z, mat, parent = house) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -634,88 +689,389 @@ function buildHouse() {
     return m;
   }
 
-  // 土台（石）
-  box(7.2, 0.4, 6.2, 0, 0.2, 0, stoneMat);
-  // 壁（木）
-  box(6.8, 2.6, 5.8, 0, 1.7, 0, woodMat);
-  // 壁の横板（ログハウス感）
-  for (let i = 0; i < 5; i++) {
-    box(7.0, 0.12, 6.0, 0, 0.5 + i * 0.5, 0, woodDarkMat);
+  // ===== 石の土台 =====
+  box(W + 0.4, 0.4, D + 0.4, 0, 0.2, 0, matStone);
+  // 土台の石目
+  for (let i = 0; i < 8; i++) {
+    box(W + 0.42, 0.08, D + 0.42, 0, 0.1 + i * 0.05, 0, matStoneDark);
   }
-  // 屋根（三角柱を2つ重ねる）
-  const roofShape = new THREE.Shape();
-  roofShape.moveTo(-4, 0);
-  roofShape.lineTo(4, 0);
-  roofShape.lineTo(0, 2.4);
-  roofShape.lineTo(-4, 0);
-  const roofGeo = new THREE.ExtrudeGeometry(roofShape, { depth: 6.4, bevelEnabled: false });
-  const roof = new THREE.Mesh(roofGeo, roofMat);
-  roof.rotation.y = Math.PI / 2;
-  roof.position.set(-3.2, 3.0, 0);
-  roof.castShadow = true;
-  house.add(roof);
-  // 屋根の棟
-  box(0.3, 0.3, 6.6, 0, 5.35, 0, woodDarkMat);
-  // 煙突
-  box(0.8, 1.8, 0.8, 1.8, 4.6, -1.4, stoneMat);
-  // 煙突の煙（半透明）
-  for (let i = 0; i < 3; i++) {
+
+  // ===== 1階の外壁（4面、ドアと窓の開口部を空ける） =====
+  // 南面（正面 +Z側）: ドア中央、両側に窓
+  // 壁を分割して開口部を作る
+  // 南面左
+  box((W - 2.4)/2 - 0.4, wallH, wallT, -(W/4 + 0.6), wallH/2 + 0.4, D/2, matWall);
+  // 南面右
+  box((W - 2.4)/2 - 0.4, wallH, wallT, (W/4 + 0.6), wallH/2 + 0.4, D/2, matWall);
+  // ドア上部（鴨居）
+  box(2.4, wallH - 2.2, wallT, 0, 2.2 + (wallH - 2.2)/2 + 0.4, D/2, matWall);
+  // 窓上部・下部は壁で埋める（窓は透過オブジェクトとして別途）
+  // 北面（背面 -Z側）
+  box(W, wallH, wallT, 0, wallH/2 + 0.4, -D/2, matWall);
+  // 東面（+X側）
+  box(wallT, wallH, D, W/2, wallH/2 + 0.4, 0, matWall);
+  // 西面（-X側）
+  box(wallT, wallH, D, -W/2, wallH/2 + 0.4, 0, matWall);
+
+  // 外壁のコライダー（開口部を考慮）
+  // 南面左
+  addHouseCollider(-(W/4 + 0.6), wallH/2 + 0.4, D/2, (W - 2.4)/2 - 0.4, wallH, wallT);
+  // 南面右
+  addHouseCollider((W/4 + 0.6), wallH/2 + 0.4, D/2, (W - 2.4)/2 - 0.4, wallH, wallT);
+  // 南面ドア上部（通り抜け不可にしないため、ドア部分はコライダーなし）
+  // 北面
+  addHouseCollider(0, wallH/2 + 0.4, -D/2, W, wallH, wallT);
+  // 東面
+  addHouseCollider(W/2, wallH/2 + 0.4, 0, wallT, wallH, D);
+  // 西面
+  addHouseCollider(-W/2, wallH/2 + 0.4, 0, wallT, wallH, D);
+
+  // ===== 木骨（ハーフティンバー）装飾 =====
+  const timberPositions = [
+    // 南面
+    [-W/2+0.15, wallH/2+0.4, D/2+0.16, 0.15, wallH, 0.05],
+    [W/2-0.15, wallH/2+0.4, D/2+0.16, 0.15, wallH, 0.05],
+    [-W/4-0.6, wallH/2+0.4, D/2+0.16, 0.12, wallH, 0.05],
+    [W/4+0.6, wallH/2+0.4, D/2+0.16, 0.12, wallH, 0.05],
+    // 北面
+    [-W/2+0.15, wallH/2+0.4, -D/2-0.16, 0.15, wallH, 0.05],
+    [W/2-0.15, wallH/2+0.4, -D/2-0.16, 0.15, wallH, 0.05],
+    // 東面
+    [W/2+0.16, wallH/2+0.4, -D/2+0.15, 0.05, wallH, 0.15],
+    [W/2+0.16, wallH/2+0.4, D/2-0.15, 0.05, wallH, 0.15],
+    // 西面
+    [-W/2-0.16, wallH/2+0.4, -D/2+0.15, 0.05, wallH, 0.15],
+    [-W/2-0.16, wallH/2+0.4, D/2-0.15, 0.05, wallH, 0.15],
+  ];
+  timberPositions.forEach(([x,y,z,w,h,d]) => box(w, h, d, x, y, z, matTimber));
+  // 横の梁
+  box(W, 0.2, 0.1, 0, wallH + 0.3, D/2 + 0.16, matTimber);
+  box(W, 0.2, 0.1, 0, wallH + 0.3, -D/2 - 0.16, matTimber);
+  box(0.1, 0.2, D, W/2 + 0.16, wallH + 0.3, 0, matTimber);
+  box(0.1, 0.2, D, -W/2 - 0.16, wallH + 0.3, 0, matTimber);
+
+  // ===== ドア =====
+  const door = box(1.6, 2.2, 0.12, 0, 1.5, D/2 + 0.04, matDoor);
+  // ドアの枠
+  box(1.9, 0.15, 0.15, 0, 2.7, D/2 + 0.05, matTimber);
+  box(0.15, 2.4, 0.15, -0.95, 1.5, D/2 + 0.05, matTimber);
+  box(0.15, 2.4, 0.15, 0.95, 1.5, D/2 + 0.05, matTimber);
+  // ドアノブ
+  const dk = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.2 }));
+  dk.position.set(0.55, 1.4, D/2 + 0.12);
+  house.add(dk);
+
+  // ===== 窓（1階・2階） =====
+  function windowAt(x, y, z, w, h, rotY = 0) {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.y = rotY;
+    // ガラス
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.06), matWindow);
+    g.add(glass);
+    // 枠
+    const frameMat = matTimber;
+    const fw = 0.08;
+    const top = new THREE.Mesh(new THREE.BoxGeometry(w + fw*2, fw, 0.12), frameMat); top.position.y = h/2 + fw/2; g.add(top);
+    const bot = new THREE.Mesh(new THREE.BoxGeometry(w + fw*2, fw, 0.12), frameMat); bot.position.y = -h/2 - fw/2; g.add(bot);
+    const left = new THREE.Mesh(new THREE.BoxGeometry(fw, h, 0.12), frameMat); left.position.x = -w/2 - fw/2; g.add(left);
+    const right = new THREE.Mesh(new THREE.BoxGeometry(fw, h, 0.12), frameMat); right.position.x = w/2 + fw/2; g.add(right);
+    // 十字桟
+    const vbar = new THREE.Mesh(new THREE.BoxGeometry(fw*0.7, h, 0.08), frameMat); g.add(vbar);
+    const hbar = new THREE.Mesh(new THREE.BoxGeometry(w, fw*0.7, 0.08), frameMat); g.add(hbar);
+    house.add(g);
+  }
+  // 南面 1階の窓（ドア両側）
+  windowAt(-2.8, 1.8, D/2 + 0.1, 1.2, 1.2);
+  windowAt(2.8, 1.8, D/2 + 0.1, 1.2, 1.2);
+  // 東面 1階
+  windowAt(W/2 + 0.1, 1.8, 0, 1.4, 1.2, Math.PI/2);
+  // 西面 1階
+  windowAt(-W/2 - 0.1, 1.8, 0, 1.4, 1.2, Math.PI/2);
+  // 南面 2階（2つ）
+  windowAt(-2.5, floor2Y + 1.3, D/2 + 0.1, 1.2, 1.2);
+  windowAt(2.5, floor2Y + 1.3, D/2 + 0.1, 1.2, 1.2);
+  // 北面 2階
+  windowAt(0, floor2Y + 1.3, -D/2 - 0.1, 1.4, 1.2);
+
+  // ===== 2階の外壁 =====
+  // 南面
+  box(W, wall2H, wallT, 0, floor2Y + wall2H/2, D/2, matWall);
+  // 北面
+  box(W, wall2H, wallT, 0, floor2Y + wall2H/2, -D/2, matWall);
+  // 東面
+  box(wallT, wall2H, D, W/2, floor2Y + wall2H/2, 0, matWall);
+  // 西面
+  box(wallT, wall2H, D, -W/2, floor2Y + wall2H/2, 0, matWall);
+
+  addHouseCollider(0, floor2Y + wall2H/2, D/2, W, wall2H, wallT);
+  addHouseCollider(0, floor2Y + wall2H/2, -D/2, W, wall2H, wallT);
+  addHouseCollider(W/2, floor2Y + wall2H/2, 0, wallT, wall2H, D);
+  addHouseCollider(-W/2, floor2Y + wall2H/2, 0, wallT, wall2H, D);
+
+  // 2階の木骨
+  [-W/2+0.15, W/2-0.15].forEach(x => {
+    box(0.15, wall2H, 0.05, x, floor2Y + wall2H/2, D/2 + 0.16, matTimber);
+    box(0.15, wall2H, 0.05, x, floor2Y + wall2H/2, -D/2 - 0.16, matTimber);
+  });
+  [-D/2+0.15, D/2-0.15].forEach(z => {
+    box(0.05, wall2H, 0.15, W/2 + 0.16, floor2Y + wall2H/2, z, matTimber);
+    box(0.05, wall2H, 0.15, -W/2 - 0.16, floor2Y + wall2H/2, z, matTimber);
+  });
+  // 2階の梁
+  box(W, 0.2, 0.1, 0, floor2Y + wall2H + 0.1, D/2 + 0.16, matTimber);
+  box(W, 0.2, 0.1, 0, floor2Y + wall2H + 0.1, -D/2 - 0.16, matTimber);
+
+  // ===== 屋根 =====
+  // 切妻屋根（2つの傾斜面）
+  function roofSlope(sign) {
+    // sign = 1: +Z側、-1: -Z側
+    const slopeW = W + 1.2;
+    const slopeD = D/2 + 0.8;
+    const slopeH = 0.15;
+    const angle = Math.atan2(2.2, D/2 + 0.8);
+    const slopeLen = Math.hypot(2.2, D/2 + 0.8);
+    const g = new THREE.Group();
+    const m = new THREE.Mesh(new THREE.BoxGeometry(slopeW, slopeH, slopeLen), matRoof);
+    m.castShadow = true; m.receiveShadow = true;
+    g.add(m);
+    // 瓦のライン
+    for (let i = 0; i < 6; i++) {
+      const tile = new THREE.Mesh(new THREE.BoxGeometry(slopeW, 0.06, 0.1), matRoofDark);
+      tile.position.z = -slopeLen/2 + (i + 0.5) * (slopeLen / 6);
+      tile.position.y = 0.08;
+      g.add(tile);
+    }
+    g.position.set(0, roofBaseY + 1.1, sign * (D/4 + 0.4));
+    g.rotation.x = sign * angle;
+    house.add(g);
+  }
+  roofSlope(1);
+  roofSlope(-1);
+  // 棟
+  box(W + 1.4, 0.25, 0.3, 0, roofBaseY + 2.3, 0, matRoofDark);
+
+  // ===== 煙突 =====
+  const chimneyX = W/2 - 1.5, chimneyZ = -D/2 + 1.5;
+  box(0.9, 3.0, 0.9, chimneyX, roofBaseY + 2.0, chimneyZ, matBrick);
+  box(1.1, 0.2, 1.1, chimneyX, roofBaseY + 3.55, chimneyZ, matStoneDark);
+  // 煙
+  for (let i = 0; i < 5; i++) {
     const smoke = new THREE.Mesh(
-      new THREE.SphereGeometry(0.35 + i * 0.1, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 - i * 0.05 })
+      new THREE.SphereGeometry(0.35 + i * 0.08, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22 - i * 0.035 })
     );
-    smoke.position.set(1.8 + Math.sin(i) * 0.2, 5.8 + i * 0.7, -1.4);
+    smoke.position.set(chimneyX + Math.sin(i*1.3)*0.3, roofBaseY + 3.9 + i * 0.7, chimneyZ);
     house.add(smoke);
   }
 
-  // ドア
-  box(1.2, 2.0, 0.15, 0, 1.3, 2.95, doorMat);
-  // ドアノブ
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.7, roughness: 0.3 }));
-  knob.position.set(0.4, 1.2, 3.05);
-  house.add(knob);
+  // ===== ポーチ =====
+  // ポーチの床
+  box(4.5, 0.2, 1.8, 0, 0.5, D/2 + 0.9, matFloorDark);
+  // ポーチの柱
+  box(0.2, 2.6, 0.2, -2.1, 1.8, D/2 + 1.7, matTimber);
+  box(0.2, 2.6, 0.2, 2.1, 1.8, D/2 + 1.7, matTimber);
+  // ポーチの屋根
+  box(4.8, 0.15, 2.0, 0, 3.1, D/2 + 0.9, matRoof);
+  // 段差
+  box(4.0, 0.15, 0.4, 0, 0.35, D/2 + 1.9, matStone);
+  box(3.6, 0.15, 0.4, 0, 0.2, D/2 + 2.25, matStone);
 
-  // 窓（正面）
-  box(1.2, 1.0, 0.12, -2.0, 1.9, 2.95, windowMat);
-  box(1.2, 1.0, 0.12, 2.0, 1.9, 2.95, windowMat);
-  // 窓枠
-  function windowFrame(x, y, z) {
-    box(1.35, 0.08, 0.16, x, y + 0.55, z, woodDarkMat);
-    box(1.35, 0.08, 0.16, x, y - 0.55, z, woodDarkMat);
-    box(0.08, 1.15, 0.16, x - 0.65, y, z, woodDarkMat);
-    box(0.08, 1.15, 0.16, x + 0.65, y, z, woodDarkMat);
-    box(0.06, 1.0, 0.14, x, y, z, woodDarkMat); // 縦の桟
-  }
-  windowFrame(-2.0, 1.9, 3.0);
-  windowFrame(2.0, 1.9, 3.0);
-  // 側面の窓
-  box(0.12, 1.0, 1.2, 3.45, 1.9, 0, windowMat);
+  // ポーチのコライダー
+  addHouseCollider(0, 0.5, D/2 + 0.9, 4.5, 0.4, 1.8);
 
-  // ポーチ（小さな屋根と柱）
-  box(3.0, 0.15, 1.2, 0, 2.9, 3.4, roofMat);
-  box(0.15, 2.2, 0.15, -1.3, 1.4, 3.9, woodDarkMat);
-  box(0.15, 2.2, 0.15, 1.3, 1.4, 3.9, woodDarkMat);
-
-  // 周囲の柵（簡易）
-  for (let i = -3; i <= 3; i += 1.5) {
-    if (Math.abs(i) < 1.2) continue; // ドア前は空ける
-    box(0.12, 0.8, 0.12, i, 0.6, 4.5, woodDarkMat);
+  // ===== 1階の床 =====
+  box(W - 0.4, 0.1, D - 0.4, 0, 0.45, 0, matFloor);
+  // 床の板目
+  for (let i = 0; i < 8; i++) {
+    box(W - 0.5, 0.02, 0.06, 0, 0.51, -D/2 + 0.5 + i * (D-1)/8, matFloorDark);
   }
 
-  // 家の周りの花壇
-  makeFlowerPatch(10 + 3.5, 6 + 2.5);
-  makeFlowerPatch(10 - 3.5, 6 + 2.5);
-  makeBush(10 + 4, 6 + 1, 1.2);
-  makeBush(10 - 4, 6 + 1, 1.2);
+  // ===== 2階の床 =====
+  box(W - 0.4, 0.2, D - 0.4, 0, floor2Y, 0, matFloor);
+  for (let i = 0; i < 8; i++) {
+    box(W - 0.5, 0.02, 0.06, 0, floor2Y + 0.11, -D/2 + 0.5 + i * (D-1)/8, matFloorDark);
+  }
+  // 2階床のコライダー（上に乗れるように）
+  addHouseCollider(0, floor2Y, 0, W - 0.4, 0.2, D - 0.4);
 
-  // 看板
-  const sign = new THREE.Group();
-  sign.position.set(10 + 1.8, 0, 6 + 4.2);
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.2, 6), woodDarkMat);
-  post.position.y = 0.6; post.castShadow = true; sign.add(post);
-  const board = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 0.08), woodMat);
-  board.position.y = 1.3; board.castShadow = true; sign.add(board);
-  house.add(sign);
+  // ===== 内部の間仕切り壁（2階） =====
+  // 2階の寝室と廊下を分ける壁
+  box(wallT, wall2H, D*0.4, -W/4, floor2Y + wall2H/2, -D/4, matWall);
+  addHouseCollider(-W/4, floor2Y + wall2H/2, -D/4, wallT, wall2H, D*0.4);
+
+  // ===== 階段（1階→2階） =====
+  // 東側の壁沿いに配置
+  const stairX = W/2 - 1.4;
+  const stairZ = -D/2 + 2.0;
+  const stairW = 1.4;
+  const stairD = 3.0;
+  const steps = 10;
+  const stepH = (floor2Y - 0.5) / steps; // 2階床まで
+  const stepD = stairD / steps;
+  for (let i = 0; i < steps; i++) {
+    const y = 0.5 + i * stepH;
+    const z = stairZ + i * stepD;
+    box(stairW, stepH, stepD, stairX, y - stepH/2, z, matFloorDark);
+  }
+  // 階段の手すり
+  for (let i = 0; i < steps; i += 2) {
+    const y = 0.5 + i * stepH;
+    const z = stairZ + i * stepD;
+    box(0.08, 0.8, 0.08, stairX - stairW/2 + 0.1, y + 0.4, z, matTimber);
+  }
+  box(0.08, 0.1, stairD, stairX - stairW/2 + 0.1, 0.5 + steps*stepH + 0.3, stairZ + stairD/2, matTimber);
+
+  // 階段のコライダー（各段）
+  for (let i = 0; i < steps; i++) {
+    const y = 0.5 + i * stepH;
+    const z = stairZ + i * stepD;
+    addHouseCollider(stairX, y - stepH/2, z, stairW, stepH, stepD);
+  }
+
+  // ===== 家具：暖炉 =====
+  const fireX = -W/2 + 1.0, fireZ = -D/2 + 1.0;
+  box(1.8, 2.2, 1.0, fireX, 1.6, fireZ, matStone);
+  box(1.4, 0.9, 0.5, fireX, 0.9, fireZ + 0.3, new THREE.MeshBasicMaterial({ color: 0x1a1a1a }));
+  // 火
+  const fire = new THREE.Mesh(
+    new THREE.ConeGeometry(0.35, 0.7, 8),
+    new THREE.MeshBasicMaterial({ color: 0xff6622 })
+  );
+  fire.position.set(fireX, 0.75, fireZ + 0.45);
+  house.add(fire);
+  addHouseCollider(fireX, 1.6, fireZ, 1.8, 2.2, 1.0);
+
+  // ===== 家具：ソファ =====
+  const sofaX = 2.5, sofaZ = 0;
+  box(2.4, 0.5, 1.0, sofaX, 0.85, sofaZ, matFabric);
+  box(2.4, 0.7, 0.3, sofaX, 1.25, sofaZ - 0.35, matFabric);
+  box(0.3, 0.7, 1.0, sofaX - 1.05, 1.05, sofaZ, matFabric);
+  box(0.3, 0.7, 1.0, sofaX + 1.05, 1.05, sofaZ, matFabric);
+  addHouseCollider(sofaX, 0.85, sofaZ, 2.4, 0.8, 1.0);
+
+  // ===== 家具：テーブル =====
+  const tableX = 2.5, tableZ = 1.8;
+  box(1.6, 0.1, 1.0, tableX, 1.1, tableZ, matWoodLight);
+  [[-0.65,-0.4],[0.65,-0.4],[-0.65,0.4],[0.65,0.4]].forEach(([dx,dz]) => {
+    box(0.1, 0.6, 0.1, tableX + dx, 0.75, tableZ + dz, matTimber);
+  });
+  addHouseCollider(tableX, 1.1, tableZ, 1.6, 0.2, 1.0);
+
+  // ===== 家具：キッチンカウンター =====
+  const kx = 0, kz = -D/2 + 1.0;
+  box(3.0, 0.9, 0.7, kx, 0.95, kz, matWoodLight);
+  box(3.0, 0.08, 0.8, kx, 1.42, kz, matStoneDark);
+  addHouseCollider(kx, 0.95, kz, 3.0, 0.9, 0.7);
+
+  // ===== 家具：本棚（2階） =====
+  const shelfX = -W/2 + 0.6, shelfZ = 0;
+  box(0.5, 2.0, 2.5, shelfX, floor2Y + 1.1, shelfZ, matTimber);
+  for (let i = 0; i < 4; i++) {
+    box(0.45, 0.05, 2.3, shelfX, floor2Y + 0.3 + i * 0.5, shelfZ, matFloorDark);
+    // 本
+    for (let j = 0; j < 6; j++) {
+      const bc = [0xc84a5a, 0x4a7ac8, 0x4ac87a, 0xc8c84a, 0x8a4ac8][j % 5];
+      box(0.3, 0.35, 0.15, shelfX, floor2Y + 0.5 + i * 0.5, shelfZ - 1.0 + j * 0.35, new THREE.MeshStandardMaterial({ color: bc, roughness: 0.8 }));
+    }
+  }
+  addHouseCollider(shelfX, floor2Y + 1.1, shelfZ, 0.5, 2.0, 2.5);
+
+  // ===== 家具：ベッド（2階） =====
+  const bedX = W/4 + 1, bedZ = D/4 - 1;
+  box(2.0, 0.4, 2.8, bedX, floor2Y + 0.4, bedZ, matTimber);
+  box(1.9, 0.2, 2.7, bedX, floor2Y + 0.7, bedZ, new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 1 }));
+  // 枕
+  box(1.2, 0.2, 0.5, bedX, floor2Y + 0.85, bedZ - 1.0, new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 1 }));
+  // 毛布
+  box(1.9, 0.1, 1.5, bedX, floor2Y + 0.85, bedZ + 0.5, new THREE.MeshStandardMaterial({ color: 0x4a7ac8, roughness: 1 }));
+  addHouseCollider(bedX, floor2Y + 0.5, bedZ, 2.0, 0.8, 2.8);
+
+  // ===== 家具：ランプ（暖炉の上） =====
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), matLamp);
+  lamp.position.set(fireX, 2.7, fireZ);
+  house.add(lamp);
+  const lampLight = new THREE.PointLight(0xffcc55, 0.8, 6, 2);
+  lampLight.position.set(fireX, 2.7, fireZ);
+  house.add(lampLight);
+
+  // ===== 外灯（ポーチ） =====
+  const porchLamp = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 10), matLamp);
+  porchLamp.position.set(0, 3.2, D/2 + 1.6);
+  house.add(porchLamp);
+  const porchLight = new THREE.PointLight(0xffcc55, 0.6, 8, 2);
+  porchLight.position.set(0, 3.2, D/2 + 1.6);
+  house.add(porchLight);
+
+  // ===== 周囲の花壇 =====
+  for (const [ox, oz] of [[-W/2-1, D/2+0.5], [W/2+1, D/2+0.5], [-W/2-1, -D/2-0.5], [W/2+1, -D/2-0.5]]) {
+    makeFlowerPatch(HX + ox, HZ + oz);
+  }
+
+  // ===== 看板 =====
+  const signPost = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.4, 6), matTimber);
+  signPost.position.set(HX + W/2 + 1.5, 0.7, HZ + D/2 + 1.5);
+  signPost.castShadow = true;
+  scene.add(signPost);
+  const signBoard = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 0.08), matWoodLight);
+  signBoard.position.set(HX + W/2 + 1.5, 1.4, HZ + D/2 + 1.5);
+  signBoard.castShadow = true;
+  scene.add(signBoard);
+
+  // 家全体のコライダーを更新（内部も含む）
+  // ※ 壁は個別に登録済み
+}
+
+// ============================================================
+// コリジョン判定
+// ============================================================
+const PLAYER_RADIUS = 0.35;
+const PLAYER_HEIGHT = 1.8;
+
+function collidesAt(x, y, z) {
+  const pr = PLAYER_RADIUS;
+  const pyMin = y + 0.1; // 足元少し上から
+  const pyMax = y + PLAYER_HEIGHT;
+  for (const c of colliders) {
+    if (x + pr > c.minX && x - pr < c.maxX &&
+        pyMax > c.minY && pyMin < c.maxY &&
+        z + pr > c.minZ && z - pr < c.maxZ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// プレイヤーが立つ床の高さを返す（家の2階、階段に対応）
+function getFloorHeight(x, z) {
+  // 家の中かどうか
+  const dx = x - houseOrigin.x, dz = z - houseOrigin.z;
+  const W = 10, D = 8;
+  const inHouse = Math.abs(dx) < W/2 - 0.2 && Math.abs(dz) < D/2 - 0.2;
+
+  let floorY = 0;
+
+  // 階段の上なら階段の高さ
+  const stairX = W/2 - 1.4, stairZ = -D/2 + 2.0, stairW = 1.4, stairD = 3.0, steps = 10;
+  const stepD = stairD / steps;
+  const localX = dx, localZ = dz;
+  if (Math.abs(localX - stairX) < stairW/2 && localZ > stairZ - stepD/2 && localZ < stairZ + stairD + stepD/2) {
+    const idx = Math.floor((localZ - (stairZ - stepD/2)) / stepD);
+    if (idx >= 0 && idx < steps) {
+      const stepH = (3.2 - 0.5) / steps;
+      floorY = Math.max(floorY, 0.5 + (idx + 1) * stepH);
+    }
+  }
+
+  // 2階の床
+  if (inHouse && Math.abs(localZ) < D/2 - 0.4 && Math.abs(localX) < W/2 - 0.4) {
+    // 階段の上端付近以外は2階の床
+    if (localX < stairX - stairW/2 || localZ < stairZ - stepD/2) {
+      floorY = Math.max(floorY, 3.2);
+    }
+  }
+
+  return floorY;
 }
 
 // ============================================================
@@ -832,7 +1188,6 @@ function setupRemotePlayersListener() {
       if (!rp) rp = createRemotePlayer(uid, p);
 
       const m = rp.model;
-      // 色を完全同期（sockColor 含む）
       m.matSkin.color.set(p.skinColor || '#b97a4b');
       m.matShirt.color.set(p.shirtColor || '#1b2a5c');
       m.matSock.color.set(p.sockColor || '#f5f5f5');
@@ -840,9 +1195,7 @@ function setupRemotePlayersListener() {
       m.matEye.color.set(p.eyeColor || '#111111');
       m.browMat.color.set(p.hairColor || '#2a1d16');
 
-      // 髪型
       if (rp._hair !== p.hair) { buildHairOn(m, p.hair || 'short'); rp._hair = p.hair; }
-      // 顔パーツ（eyeShape と mouth の両方を監視）
       if (rp._eyeShape !== p.eyeShape || rp._mouth !== p.mouth) {
         applyFaceOn(m, { eyeShape: p.eyeShape, mouth: p.mouth });
         rp._eyeShape = p.eyeShape; rp._mouth = p.mouth;
@@ -1009,7 +1362,6 @@ function setupUI() {
     custom.mouth = b.dataset.mouth; refreshCustomUI(); applyMyCustomization(); saveLocal();
     if (PLAYER_ID) update(ref(db, 'players/' + PLAYER_ID), { mouth: custom.mouth }).catch(() => {});
   });
-
   ['hairColor', 'skinColor', 'shirtColor', 'sockColor', 'eyeColor'].forEach(id => {
     document.getElementById(id).addEventListener('input', (e) => {
       custom[id] = e.target.value; applyMyCustomization(); saveLocal();
@@ -1086,7 +1438,7 @@ function saveLocal() {
 }
 
 // ============================================================
-// ローカルポーズ計算
+// ローカルポーズ計算（コリジョン対応）
 // ============================================================
 function computeLocalPose(now, dt) {
   const chatting = document.activeElement === chatInput;
@@ -1104,13 +1456,27 @@ function computeLocalPose(now, dt) {
   const canMove = !sitting && !emoteName && !chatting;
 
   const g = myModel.group;
+  // 水平移動（X/Z軸分離でスライド）
   if (canMove && mag > 0) {
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
     const rx = Math.cos(yaw), rz = -Math.sin(yaw);
     let dx = fx * iz + rx * ix, dz = fz * iz + rz * ix;
     const l = Math.hypot(dx, dz); dx /= l; dz /= l;
-    vel.x += (dx * speed - vel.x) * Math.min(1, dt * 10);
-    vel.z += (dz * speed - vel.z) * Math.min(1, dt * 10);
+
+    const stepX = dx * speed * dt;
+    const stepZ = dz * speed * dt;
+    const floorY = getFloorHeight(g.position.x, g.position.z);
+    // X方向
+    if (!collidesAt(g.position.x + stepX, floorY, g.position.z)) {
+      g.position.x += stepX;
+    }
+    // Z方向
+    if (!collidesAt(g.position.x, floorY, g.position.z + stepZ)) {
+      g.position.z += stepZ;
+    }
+    // 速度更新（表示用）
+    vel.x = dx * speed;
+    vel.z = dz * speed;
     const target = Math.atan2(dx, dz);
     let d = target - facing; d = Math.atan2(Math.sin(d), Math.cos(d));
     facing += d * Math.min(1, dt * 12);
@@ -1118,12 +1484,22 @@ function computeLocalPose(now, dt) {
     vel.x *= Math.max(0, 1 - dt * 10);
     vel.z *= Math.max(0, 1 - dt * 10);
   }
+
+  // ジャンプ
+  const floorY = getFloorHeight(g.position.x, g.position.z);
   if ((keys.Space || jumpBtn) && onGround && !sitting && !emoteName && !chatting) { vy = 7; onGround = false; }
   vy -= 20 * dt;
   g.position.y += vy * dt;
-  if (g.position.y <= 0) { g.position.y = 0; vy = 0; onGround = true; }
-  g.position.x += vel.x * dt;
-  g.position.z += vel.z * dt;
+
+  // 着地判定（床の高さに応じて）
+  if (g.position.y <= floorY) {
+    g.position.y = floorY;
+    vy = 0;
+    onGround = true;
+  } else {
+    onGround = false;
+  }
+
   g.rotation.y = facing;
 
   const sp = Math.hypot(vel.x, vel.z);
@@ -1276,7 +1652,7 @@ function loop(now) {
   camera.lookAt(tx, ty, tz);
   sun.position.set(tx + 30, 40, tz + 20);
   sun.target.position.set(tx, 0, tz);
-  posEl.innerHTML = `<br><small>X ${tx.toFixed(1)}　Z ${tz.toFixed(1)}</small>`;
+  posEl.innerHTML = `<br><small>X ${tx.toFixed(1)}　Y ${myModel.group.position.y.toFixed(1)}　Z ${tz.toFixed(1)}</small>`;
 
   updateBubbles(dt);
   syncMyState(dt);
